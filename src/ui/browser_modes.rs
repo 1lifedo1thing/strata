@@ -3892,7 +3892,7 @@ fn install_preview_click(
             gesture.set_state(gtk::EventSequenceState::Claimed);
             if press_count == 1 {
                 browser.select(depth, position);
-                if !browser.is_chooser_mode()
+                if (!browser.is_chooser_mode() || entry.is_directory())
                     && (!is_trash_location(&entry.location) || entry.is_directory())
                 {
                     browser.activate_in_place(depth, position);
@@ -3907,8 +3907,8 @@ fn install_preview_click(
         }
         if should_activate_pointer_click(press_count, entry.is_directory(), click_activation.get())
         {
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            if !browser.is_chooser_mode() {
+            if !browser.is_chooser_mode() || entry.is_directory() {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
                 browser.activate_in_place(depth, position);
             }
         } else if press_count == 1
