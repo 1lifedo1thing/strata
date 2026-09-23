@@ -584,7 +584,7 @@ impl ViewState {
             BrowserEvent::PreviewRequested { .. } => {}
             BrowserEvent::ExtractRequested { entry } => {
                 if self.interactive {
-                    self.extract_entry_to_subfolder(entry.clone());
+                    self.extract_entry(entry.clone());
                 }
             }
             BrowserEvent::OpenRequested { location } => {
