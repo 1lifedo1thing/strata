@@ -2,6 +2,7 @@
 
 mod bookmarks;
 mod keyboard_policy;
+mod preferences;
 
 use crate::test_support::gtk_test;
 

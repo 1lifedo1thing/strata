@@ -36,6 +36,7 @@ mod search_session;
 mod settings;
 mod shortcut_footer;
 mod table_view;
+mod tenxer_mode;
 mod terminal;
 mod theme;
 mod thumbnail;
