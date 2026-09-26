@@ -65,6 +65,27 @@ def test_arrow_scope_keeps_focus_in_files_and_toggles_live(strata, mode, binding
     strata.wait_for_focused_entry("archive")
 
 
+@pytest.mark.preferences(tenxer_mode=True, type_to_search=True)
+def test_tenxer_keeps_location_edit_and_skips_the_filter_shortcut(strata):
+    strata.select_entry("readme.md")
+    names = strata.entry_names()
+
+    strata.keyboard.press("ctrl+f")
+    strata.wait(
+        lambda: strata.window.find(role="text", states={"editable", "focused"}) is None,
+        "Ctrl+F does not open a filter while 10xer is on",
+    )
+    assert strata.entry_names() == names
+    assert strata.environment.read_preferences().get("tenxer_mode") == "true"
+
+    strata.keyboard.press("ctrl+l")
+    field = strata.editable_field()
+    strata.keyboard.press("q")
+    strata.wait(lambda: "q" in field.text.lower(), "q is typed into the location field")
+    assert strata.environment.read_preferences().get("tenxer_mode") == "true"
+    assert strata.entry_names() == names
+
+
 @pytest.mark.parametrize("mode", COLUMNS_AND_ONE)
 def test_alt_up_and_history_navigate_between_directories(strata, mode):
     root = strata.fixture.root.name

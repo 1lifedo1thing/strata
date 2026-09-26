@@ -617,7 +617,7 @@ impl PreferenceManager {
     }
 
     pub fn arrow_navigation_scoped_active(&self) -> bool {
-        self.arrow_navigation_scoped() && !self.tenxer_mode()
+        self.tenxer_mode() || self.arrow_navigation_scoped()
     }
 
     pub fn show_keybinding_hints(&self) -> bool {

@@ -163,8 +163,13 @@ fn install_browser_actions(
     });
     window.add_action(&toggle_action);
     if let Some(application) = window.application() {
-        for (action, accels) in super::DEFAULT_ACCELS {
-            application.set_accels_for_action(action, accels);
-        }
+        let application = application.clone();
+        preferences.bind_preference(
+            window,
+            PreferenceManager::tenxer_mode,
+            move |_window, enabled| {
+                super::install_mode_accelerators(&application, enabled);
+            },
+        );
     }
 }
