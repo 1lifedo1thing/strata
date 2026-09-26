@@ -1361,6 +1361,25 @@ impl BrowserView {
         }
     }
 
+    pub fn toggle_folder_peek(&self) {
+        if self.state.peek.borrow().is_some() {
+            self.state.browser.close_peek();
+            self.keyboard_navigation();
+            return;
+        }
+        self.keyboard_navigation();
+        self.state.open_keyboard_peek();
+    }
+
+    pub fn focus_search_results(&self) -> bool {
+        self.state.mode_views.borrow().focus_search_results()
+    }
+
+    #[cfg(test)]
+    pub fn focus_search_result(&self, path: &std::path::Path) -> bool {
+        self.state.mode_views.borrow().focus_search_result(path)
+    }
+
     pub fn keyboard_navigation(&self) {
         self.state
             .input_ownership
@@ -1372,7 +1391,6 @@ impl BrowserView {
         }
         cancel_source(&self.state.pending_peek);
         self.state.browser.close_peek();
-        // Capture-phase navigation must cancel history restore before pane key handling.
         self.state.mode_views.borrow_mut().cancel_list_restore();
         self.state.sync_mode_selection();
         self.state.refresh_destination_style();
