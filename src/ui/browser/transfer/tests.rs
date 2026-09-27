@@ -1365,6 +1365,10 @@ struct SendToToastFixture {
 }
 
 fn open_send_to_toast_browser(fixture_name: &str, files: &[&str]) -> SendToToastFixture {
+    // Avoid racing the real progress timer under full-suite I/O load.
+    crate::ui::browser::progress::set_file_progress_delay_for_test(std::time::Duration::from_secs(
+        60,
+    ));
     let tempdir = tempfile::tempdir().expect(fixture_name);
     let source_dir = tempdir.path().join("source");
     let device = tempdir.path().join("VANIA");
