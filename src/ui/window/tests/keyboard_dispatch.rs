@@ -12,6 +12,7 @@ use super::super::*;
 use crate::services::{
     LoadHandle, Preview, PreviewContent, PreviewEvent, PreviewProvider, PreviewRequest,
 };
+mod folder_jump;
 mod footer_prompt;
 mod go_prompt;
 mod place_chords;
@@ -51,7 +52,9 @@ struct KeyboardFixture {
     sidebar_toggle: gtk::ToggleButton,
     shortcuts: ShortcutFooter,
     keys: gtk::EventControllerKey,
+    history: Rc<crate::services::NavigationHistory>,
     _directory: tempfile::TempDir,
+    _history_directory: tempfile::TempDir,
 }
 
 impl KeyboardFixture {
@@ -81,6 +84,10 @@ impl KeyboardFixture {
         for name in ["a.txt", "b.txt", "c.txt"] {
             std::fs::write(directory.path().join(name), b"preview").expect("fixture file");
         }
+        let history_directory = tempfile::tempdir().expect("history fixture");
+        let history = Rc::new(crate::services::NavigationHistory::open(
+            history_directory.path().join("history.json"),
+        ));
         let view = view();
         view.set_view_mode(BrowserMode::Columns);
         let sidebar = build_sidebar(view.clone(), preferences.clone(), true);
@@ -118,6 +125,7 @@ impl KeyboardFixture {
                 },
                 shortcuts: shortcuts.clone(),
                 folders,
+                history: history.clone(),
             },
         );
         let controllers = window.observe_controllers();
@@ -148,7 +156,9 @@ impl KeyboardFixture {
             sidebar_toggle: toggle,
             shortcuts: shortcuts.clone(),
             keys,
+            history,
             _directory: directory,
+            _history_directory: history_directory,
         }
     }
 
@@ -1700,6 +1710,14 @@ fn tenxer_list_and_columns_move_enter_and_traverse_history() {
             assert!(!fixture.view.filter_has_focus());
             assert!(fixture.sidebar_toggle.is_active());
             assert!(!fixture.preview.is_open());
+            fixture.press(Key::n, ModifierType::CONTROL_MASK);
+            assert!(
+                !fixture.sidebar_toggle.is_active(),
+                "Ctrl+N hides the sidebar"
+            );
+            assert!(fixture.view.item_view_has_focus());
+            fixture.press(Key::n, ModifierType::CONTROL_MASK);
+            assert!(fixture.sidebar_toggle.is_active(), "Ctrl+N shows it again");
 
             browser.set_sort(0, SortKey::Name, SortDirection::Descending);
             wait_until(|| {
@@ -1928,6 +1946,11 @@ fn tenxer_list_and_columns_move_enter_and_traverse_history() {
             assert!(fixture.sidebar_toggle.is_active());
             fixture.press(Key::b, ModifierType::CONTROL_MASK);
             assert!(!fixture.sidebar_toggle.is_active());
+            fixture.press(Key::n, ModifierType::CONTROL_MASK);
+            assert!(
+                !fixture.sidebar_toggle.is_active(),
+                "Ctrl+N toggles only in 10xer mode"
+            );
 
             preferences.set_tenxer_mode(true);
             focus_files(&fixture);

@@ -2,11 +2,12 @@
 
 > This document is the target product specification, not a completion report.
 
-10xer mode is an opt-in Yazi-style browsing map. In **Settings → General → Browsing** the row is titled **10xer mode** and its subtitle is **Opinionated keyboard-centric mode with Yazi-style navigation. Disables some features. Toggle with Ctrl-Shift-M.** The footer shows a compact **10X** pill at the right, immediately before the item count, while the mode is on. It hides window Search and pane
-Close/filter/refresh/sort chrome in interactive browsers, disables
+10xer mode is an opt-in Yazi-style browsing map. In **Settings → General → Browsing** the row is titled **10xer mode** and its subtitle is **Opinionated keyboard-centric mode with Yazi-style navigation. Disables some features. Toggle with Ctrl-Shift-M.** The footer shows a compact **10X** pill in its far right corner, after the item count, while the mode is on. It hides window Search, pane
+Close/filter/refresh/sort chrome, and the List and Icons pane header (back,
+forward, and up buttons with the folder title) in interactive browsers, disables
 type-to-search, and uses the footer as the typed-command surface. List column
 headings stay clickable. The portal file chooser follows the same preference:
-it hides pane Close/filter/refresh/sort chrome, uses this keymap and the footer
+it hides the same pane chrome, uses this keymap and the footer
 prompt, and keeps Accept, Cancel, and the header close control. **Enter** / **o**
 confirm a file. **Esc** still cancels the dialog after dismissing a prompt,
 filter, or preview. **q** leaves the mode without cancelling. The chooser
@@ -103,7 +104,7 @@ Each preview surface owns a fixed set of keys. A key a surface does not use is
 swallowed rather than passed to the listing behind it, so no key held by a
 preview can launch, move, rename, delete, paste into, or select listing items.
 Window commands that do not touch the listing (**q**, **Q**, **F1**, **F5**,
-**Ctrl+K**, **Ctrl+L**, **Ctrl+,**, **Ctrl+1**–**3**, **Ctrl+H**,
+**Ctrl+K**, **Ctrl+L**, **Ctrl+,**, **Ctrl+1**–**3**, **Ctrl+H**, **Ctrl+N**,
 **Ctrl+Shift+B**, **Ctrl+Shift+M**, and text size) still work. Inside a text
 field only **F1** and **Ctrl+Shift+M** still work; every other key is typed or
 edits the text.
@@ -265,10 +266,11 @@ broken links report an error instead of guessing a type from the first item.
 ## Places
 
 Press **g**, then a second key. The chord stays armed while the footer **g-**
-mark is showing. Sidebar keycaps appear on Home (**h**), Downloads (**d**),
-Trash (**t**), Network (**n**), Recent (**r**), Documents (**k**), Pictures
-(**p**), Videos (**v**), and visible PINNED rows (**1**–**9** in display
-order), plus a short list of valid second keys. **,**, **c**, and **;** show
+pill is showing beside the **10X** pill, and a panel over the pill lists the valid second keys; it
+never takes focus, so the next key still completes the chord. Sidebar keycaps
+appear on Home (**h**), Downloads (**d**), Trash (**t**), Network (**n**),
+Recent (**r**), Documents (**k**), Pictures (**p**), Videos (**v**), and
+visible PINNED rows (**1**–**9** in display order). **,**, **c**, and **;** show
 the same kind of list (sort options / copy path or name / matching custom
 actions) while armed. The second key completes only that chord: **, a** /
 **, m** / **, s** / **, e** sort instead of create / search, and search-result
@@ -278,7 +280,7 @@ actions) while armed. The second key completes only that chord: **, a** /
 | Second key | Destination |
 | --- | --- |
 | **g** | First item |
-| **f** | Search results: the folder holding the hit under the cursor, with that item selected. Ends the search. Without hits: `Nothing to reveal`. |
+| **f** | Follow search result: open the folder holding the hit under the cursor, with that item selected. Ends the search. Without hits: `Nothing to reveal`. |
 | **h** | Home |
 | **d** | Downloads. Missing: `No Downloads folder`. |
 | **c** | Config (`~/.config`) |
@@ -342,8 +344,8 @@ listing row closes the prompt and keeps that selection.
 | **n** / **N** | Repeat the last find. **N** reverses. |
 | **f** | Filter this listing (hides non-matches). The footer shows `filter: …` until dismissed. |
 | **s** | Recursive name search in the current folder (cap 100). The footer shows `search: …` until dismissed. Prompt **Esc** keeps hits; listing **Esc** follows the precedence above. |
-| **z** | Jump to a visited folder (fuzzy + frecency) |
-| **Z** | Jump to a recent folder (last visit) |
+| **z** | Jump to a visited folder (name match, then frecency) |
+| **Z** | Jump to a recently visited folder (last visit first) |
 | **a** | Create |
 | **r** | Rename |
 | **Tab** / **Shift+Tab** | Cycle matching folders in the go prompt |
@@ -398,9 +400,18 @@ window discards the previous query's pending hits; a view change keeps the
 search. A folder without a local path, such as Network, flashes
 `Nothing to search`.
 
-**z** / **Z** use Strata folder history, not a zoxide database. Empty input
-still lists candidates; **Up** / **Down** pick a row, **Enter** goes there.
-A miss shows `No matching folders` and does not navigate.
+**z** (`jump ›`) and **Z** (`recent ›`) pick from the folders Strata has
+opened, the same saved history as the default map's **Ctrl+Shift+K**, not a
+zoxide database. **z** ranks by name match first, then by how often and how
+recently each folder was opened; **Z** keeps matching folders in last-visit
+order. The folder already open is left out. Candidates list above the footer
+as you type, including for empty input, with the first one chosen. **Up** /
+**Down** choose another row (wrapping) while the entry keeps focus, and
+**Enter** or a click opens the chosen folder once. Editing the text lists
+fresh candidates and chooses the first again. A miss shows
+`No matching folders`, and **Enter** then leaves the prompt open without
+navigating. **Esc**, focus loss, a replacing prompt, and leaving the mode close
+the prompt without opening a candidate.
 
 ## Search results
 
@@ -413,7 +424,7 @@ While **s** results are showing:
 | **Enter** | With focus already on the results, activate the focused hit once through ordinary open. **Enter** in the **f** or **s** prompt only applies that prompt. |
 | **i** | Directory hit: open an unfocused Miller column, or toggle folder peek. File hit: toggle the preview. Neither takes preview ownership. |
 | **h** | List and Columns: leave preview keyboard ownership, or dismiss search (restoring an earlier **f** filter if present). Icons: move to the next result icon. |
-| **g f** | Open the folder holding the focused hit and select it there. Ends the search without restoring an **f** filter, so the item is visible; **H** returns. |
+| **g f** | Follow search result: open the folder holding the focused hit and select it there. Ends the search without restoring an **f** filter, so the item is visible; **H** returns. |
 
 **Space** does not preview search rows. Use **g g** / **G** to reach the first /
 last result; **Home** / **End** and paging keys are swallowed on result lists
@@ -428,9 +439,10 @@ panes. **Tab** moves from the file list to the window header. **Shift+Tab**
 stays with the files. From the footer or other chrome outside the header and
 sidebar, the next **Tab** or arrow key returns to the file list.
 
-**Ctrl+Shift+B** focuses the sidebar when it is visible. A hidden sidebar stays
-hidden; the header toggle is what shows or hides it. **Ctrl+B** does not toggle
-it. Pressing **Ctrl+Shift+B** again returns to the files.
+**Ctrl+N** shows or hides the sidebar, like the header toggle, and passes
+through while the preview owns the keys. **Ctrl+B** pages up instead of
+toggling it. **Ctrl+Shift+B** focuses the sidebar when it is visible; a hidden
+sidebar stays hidden. Pressing **Ctrl+Shift+B** again returns to the files.
 
 In the sidebar, **j** / **k** and **Up** / **Down** move between places and
 device controls. **l**, **Enter**, and **Space** activate the focused place or
@@ -481,7 +493,7 @@ These default-map shortcuts are unbound or remapped while the mode is on:
 | **Ctrl+\\** | Unbound. Arrows never leave the file list. |
 | **Ctrl+D** | Half page down. Duplicate is dropped. |
 | **Ctrl+F** | Full page down. Filter is **f**. |
-| **Ctrl+B** | Full page up. Sidebar toggle is the header button. |
+| **Ctrl+B** | Full page up. Sidebar toggle is **Ctrl+N**. |
 | **Ctrl+R** | Invert selection. Rename is **r** / **F2**. |
 | **y** / **p** (default map) | Yank / paste. Path copy is **c c**; jump to an existing pin with **g** then a digit. |
 | **Space** | Toggle selection. In List and Columns, preview is **l** / **→**. |

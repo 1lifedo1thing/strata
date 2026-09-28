@@ -505,6 +505,12 @@ const TENXER_SETTINGS: &[Binding] = &[
         keys: "Ctrl + 0",
     },
     Binding {
+        category: "View",
+        action: "Toggle sidebar",
+        note: "Ctrl + B pages up in 10xer mode",
+        keys: "Ctrl + N",
+    },
+    Binding {
         category: "Preview",
         action: "Toggle the preview",
         note: "On a file; focus stays in the listing",
@@ -650,12 +656,12 @@ const TENXER_PLACE_CHORDS: &[PlaceChord] = &[
     PlaceChord {
         binding: Binding {
             category: "Places",
-            action: "Folder holding the search hit",
+            action: "Follow search result",
             note: "Selects the hit and ends the search",
             keys: "g f",
         },
         reference_keys: "",
-        reference_label: "Folder holding the search hit",
+        reference_label: "Follow search result",
     },
     PlaceChord {
         binding: Binding {
@@ -716,6 +722,36 @@ const TENXER_PLACE_CHORDS: &[PlaceChord] = &[
         },
         reference_keys: "Tab / Shift + Tab in go ›",
         reference_label: "Cycle matching folders",
+    },
+    PlaceChord {
+        binding: Binding {
+            category: "Places",
+            action: "Jump to a visited folder",
+            note: "Ranked by match, visit count, and recency",
+            keys: "z",
+        },
+        reference_keys: "",
+        reference_label: "Jump to a visited folder",
+    },
+    PlaceChord {
+        binding: Binding {
+            category: "Places",
+            action: "Jump to a recent folder",
+            note: "Most recent visit first",
+            keys: "Z",
+        },
+        reference_keys: "",
+        reference_label: "Jump to a recent folder",
+    },
+    PlaceChord {
+        binding: Binding {
+            category: "Places",
+            action: "Choose a visited folder",
+            note: "In the jump or recent prompt",
+            keys: "↑ / ↓",
+        },
+        reference_keys: "↑ / ↓ in jump › / recent ›",
+        reference_label: "Choose a visited folder",
     },
     PlaceChord {
         binding: Binding {
@@ -1081,6 +1117,7 @@ const TENXER_TOOLS: &[(&str, &str)] = &[
         "Activate the focused control",
     ),
     ("h / j in the header", "Return to the files"),
+    ("Ctrl+N", "Show or hide the sidebar"),
     ("Ctrl+Shift+B", "Focus the sidebar when it is visible"),
     (
         "j / k / ↑ / ↓ in the sidebar",

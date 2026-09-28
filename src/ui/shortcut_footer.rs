@@ -2,11 +2,15 @@
 
 use std::{
     cell::{Cell, RefCell},
+    path::PathBuf,
     rc::Rc,
     time::Duration,
 };
 
 use gtk::{gdk, glib, prelude::*};
+
+use candidates::Candidates;
+use chord_panel::ChordPanel;
 
 use super::{
     browser::FilterStatus,
@@ -108,27 +112,30 @@ impl CurrentHit {
     }
 }
 
-/// The armed chord and its footer mark. The chord is armed exactly while the
-/// mark is showing.
+/// The chord is armed only while its pill is visible.
 #[derive(Clone)]
 struct ChordIndicator {
     armed: Rc<Cell<Option<Chord>>>,
     mark: glib::WeakRef<gtk::Label>,
-    hint: glib::WeakRef<gtk::Label>,
+    panel: ChordPanel,
     listeners: Rc<RefCell<Vec<ChordListener>>>,
 }
 
 impl ChordIndicator {
     fn set(&self, chord: Option<Chord>) {
+        let previous = self.armed.replace(chord);
         if let Some(mark) = self.mark.upgrade() {
             mark.set_text(chord.map_or("", Chord::mark));
             mark.set_visible(chord.is_some());
+            match chord {
+                Some(chord) if previous != Some(chord) => {
+                    self.panel.show(&mark, chord, self.armed.clone());
+                }
+                Some(_) => {}
+                None => self.panel.hide(),
+            }
         }
-        if let Some(hint) = self.hint.upgrade() {
-            hint.set_text(chord.map_or("", Chord::hint));
-            hint.set_visible(chord.is_some());
-        }
-        if self.armed.replace(chord) != chord {
+        if previous != chord {
             for listener in self.listeners.borrow().iter() {
                 listener(chord);
             }
@@ -285,6 +292,7 @@ struct PromptBar {
     resets: PromptResetListeners,
     /// Set while a [`PromptSink`] replaces the text, which is not an edit.
     replacing: Rc<Cell<bool>>,
+    candidates: Rc<Candidates>,
 }
 
 #[derive(Clone)]
@@ -296,6 +304,7 @@ struct WeakPromptBar {
     kind: Rc<Cell<Option<Prompt>>>,
     resets: PromptResetListeners,
     replacing: Rc<Cell<bool>>,
+    candidates: Rc<Candidates>,
 }
 
 impl PromptBar {
@@ -316,6 +325,7 @@ impl PromptBar {
         bar.append(&label);
         bar.append(&entry);
         bar.append(&hint);
+        let candidates = Candidates::attach(&entry);
         Self {
             bar,
             label,
@@ -324,6 +334,7 @@ impl PromptBar {
             kind: Rc::new(Cell::new(None)),
             resets: Rc::default(),
             replacing: Rc::default(),
+            candidates,
         }
     }
 
@@ -336,6 +347,7 @@ impl PromptBar {
             kind: self.kind.clone(),
             resets: self.resets.clone(),
             replacing: self.replacing.clone(),
+            candidates: self.candidates.clone(),
         }
     }
 
@@ -350,6 +362,7 @@ impl PromptBar {
 
     fn reset(&self) {
         self.set_hint(None);
+        self.candidates.clear();
         for listener in self.resets.borrow().iter() {
             listener();
         }
@@ -404,6 +417,7 @@ impl WeakPromptBar {
             kind: self.kind.clone(),
             resets: self.resets.clone(),
             replacing: self.replacing.clone(),
+            candidates: self.candidates.clone(),
         })
     }
 }
@@ -455,16 +469,12 @@ impl ShortcutFooter {
         super::accessibility::set_label(&tag, crate::ui::tenxer_mode::TAG_NAME);
         tag.set_visible(false);
         let chord = gtk::Label::new(None);
-        chord.add_css_class("shortcut-footer-chord");
+        chord.add_css_class("shortcut-footer-chord-pill");
         chord.set_visible(false);
-        let chord_hint = gtk::Label::new(None);
-        chord_hint.add_css_class("shortcut-footer-chord-hint");
-        chord_hint.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        chord_hint.set_visible(false);
         let chords = ChordIndicator {
             armed: Rc::new(Cell::new(None)),
             mark: chord.downgrade(),
-            hint: chord_hint.downgrade(),
+            panel: ChordPanel::attach(&chord),
             listeners: Rc::new(RefCell::new(Vec::new())),
         };
         let visual = gtk::Label::new(None);
@@ -483,12 +493,10 @@ impl ShortcutFooter {
         status.append(&paste);
         status.append(&filter);
         status.append(&visual);
-        status.append(&chord);
-        status.append(&chord_hint);
-        // Transient marks grow leftward so the pill stays put.
-        status.append(&tag);
         status.append(&feedback);
         status.append(&count);
+        status.append(&chord);
+        status.append(&tag);
         root.add_child(&status);
         root.add_child(&prompt.bar);
         let show_hints = Rc::new(Cell::new(true));
@@ -762,7 +770,6 @@ impl ShortcutFooter {
             more.clone().upcast(),
             tag.clone().upcast(),
             chord.clone().upcast(),
-            chord_hint.clone().upcast(),
             visual.clone().upcast(),
             filter.clone().upcast(),
             current.root.clone().upcast(),
@@ -1178,6 +1185,43 @@ impl ShortcutFooter {
         self.prompt.close();
     }
 
+    pub(in crate::ui) fn show_candidates(&self, paths: Vec<PathBuf>) {
+        if self.prompt.bar.is_visible() {
+            self.prompt.candidates.set(paths);
+        }
+    }
+
+    pub(in crate::ui) fn step_candidate(&self, delta: i32) {
+        self.prompt.candidates.step(delta);
+    }
+
+    pub(in crate::ui) fn chosen_candidate(&self) -> Option<PathBuf> {
+        self.prompt.candidates.chosen()
+    }
+
+    pub(in crate::ui) fn candidate_position(&self) -> Option<(usize, usize)> {
+        self.prompt.candidates.position()
+    }
+
+    pub(in crate::ui) fn connect_candidate_activated(&self, listener: impl Fn(PathBuf) + 'static) {
+        self.prompt.candidates.connect_activated(listener);
+    }
+
+    #[cfg(test)]
+    pub(in crate::ui) fn candidates(&self) -> Vec<PathBuf> {
+        self.prompt.candidates.paths()
+    }
+
+    #[cfg(test)]
+    pub(in crate::ui) fn candidates_shown(&self) -> bool {
+        self.prompt.candidates.is_shown()
+    }
+
+    #[cfg(test)]
+    pub(in crate::ui) fn click_candidate(&self, index: usize) {
+        self.prompt.candidates.activate(index);
+    }
+
     pub(in crate::ui) fn arm_chord(&self, chord: Chord) {
         self.chords.set(Some(chord));
     }
@@ -1200,9 +1244,8 @@ impl ShortcutFooter {
     }
 
     #[cfg(test)]
-    pub(in crate::ui) fn chord_hint(&self) -> Option<String> {
-        let hint = self.chords.hint.upgrade()?;
-        hint.is_visible().then(|| hint.text().to_string())
+    pub(in crate::ui) fn chord_options(&self) -> Option<Vec<(String, String)>> {
+        self.chords.panel.shown_options()
     }
 
     pub(in crate::ui) fn prompt_is_visible(&self) -> bool {
@@ -1931,5 +1974,7 @@ fn append_section(parent: &gtk::Box, title: &str, shortcuts: &[Shortcut], compac
     parent.append(&section);
 }
 
+mod candidates;
+mod chord_panel;
 #[cfg(test)]
 mod tests;

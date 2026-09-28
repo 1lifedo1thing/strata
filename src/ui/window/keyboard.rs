@@ -13,6 +13,7 @@ use gtk::{
 
 use crate::{
     app::Browser,
+    services::NavigationHistory,
     ui::{
         browser::BrowserView,
         go_completion::{FolderSource, GoCompletion},
@@ -46,6 +47,7 @@ pub(super) struct Bindings {
     pub type_to_search: TypeToSearch,
     pub shortcuts: ShortcutFooter,
     pub folders: Rc<dyn FolderSource>,
+    pub history: Rc<NavigationHistory>,
 }
 
 pub(super) fn install(window: &gtk::ApplicationWindow, sidebar: &SidebarView, bindings: Bindings) {
@@ -60,6 +62,7 @@ pub(super) fn install(window: &gtk::ApplicationWindow, sidebar: &SidebarView, bi
         type_to_search: bindings.type_to_search,
         shortcuts: bindings.shortcuts,
         go: GoCompletion::new(bindings.folders),
+        history: bindings.history,
         sidebar: SidebarFocus {
             state: sidebar.state.clone(),
             widget: sidebar.widget.clone(),
@@ -82,6 +85,7 @@ pub(super) fn install(window: &gtk::ApplicationWindow, sidebar: &SidebarView, bi
         go_on_destroy.invalidate();
     });
     bind_go_completion(&dispatcher);
+    bind_history_prompts(&dispatcher);
     let preferences = dispatcher.type_to_search.preferences.clone();
     release_preview_keys_on_mode_exit(window, &dispatcher.preview, &weak_browser);
     clear_find_on_mode_exit(window, &dispatcher, &weak_browser);
@@ -195,6 +199,36 @@ fn bind_go_completion(dispatcher: &Dispatcher) {
             hint.show(None, None);
         }
     });
+}
+
+fn bind_history_prompts(dispatcher: &Dispatcher) {
+    let shortcuts = dispatcher.shortcuts.clone();
+    let history = dispatcher.history.clone();
+    let browser = Rc::downgrade(&dispatcher.view.browser());
+    dispatcher.shortcuts.connect_prompt_changed(move |kind, _| {
+        if let Some(browser) = browser.upgrade() {
+            prompts::show_history_candidates(&shortcuts, &history, &browser, kind);
+        }
+    });
+    let shortcuts = dispatcher.shortcuts.clone();
+    let view = dispatcher.view.clone();
+    dispatcher
+        .shortcuts
+        .connect_candidate_activated(move |path| {
+            if !shortcuts
+                .open_prompt_kind()
+                .is_some_and(crate::ui::tenxer_mode::Prompt::picks_history)
+            {
+                return;
+            }
+            shortcuts.dismiss_prompt();
+            if !view.focus_visible_results() {
+                view.browser().focus_active();
+            }
+            view.keyboard_navigation();
+            view.browser()
+                .navigate_with_selection(crate::model::Location::local(path), true);
+        });
 }
 
 /// Leaving 10xer mode forgets the find, footer filters, and search, and hands a focused
@@ -403,6 +437,7 @@ struct Dispatcher {
     type_to_search: TypeToSearch,
     shortcuts: ShortcutFooter,
     go: GoCompletion,
+    history: Rc<NavigationHistory>,
 }
 
 struct KeyEvent {
