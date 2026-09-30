@@ -1038,6 +1038,14 @@ impl ModeViews {
         ))
     }
 
+    pub(in crate::ui) fn pane_searches(&self) -> Vec<super::inline_search::InlineSearch> {
+        self.icons_panes
+            .iter()
+            .chain(self.list_pane.iter())
+            .map(|pane| pane.search.clone())
+            .collect()
+    }
+
     pub(in crate::ui) fn hidden_filter_entries(&self) -> Vec<gtk::Entry> {
         self.icons_panes
             .iter()

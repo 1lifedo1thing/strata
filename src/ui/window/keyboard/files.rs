@@ -145,6 +145,9 @@ impl Dispatcher {
     /// selected as inline rename does. The item is fixed now, so a later
     /// cursor move cannot redirect the rename.
     fn open_rename_prompt(&self) {
+        if self.chooser_edit_name() {
+            return;
+        }
         let Some(entry) = self.view.focused_target() else {
             self.shortcuts.show_feedback("Nothing to rename");
             return;
