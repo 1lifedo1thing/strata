@@ -66,6 +66,8 @@ pub(in crate::ui) fn non_default_preferences() -> Preferences {
         auto_refresh_interval: 600,
         thumbnail_workers: 6,
         icons_thumbnail_size: 128,
+        chooser_column_width: Some(420),
+        browser_column_width: Some(380),
         cross_volume_drop_strategy: CrossVolumeDropStrategy::Move.as_str().into(),
         open_folder_after_drop: true,
         date_format: "iso".into(),
@@ -86,6 +88,20 @@ pub(in crate::ui) fn non_default_preferences() -> Preferences {
                 vec![PathBuf::from("Backup")],
             ),
         ]),
+        browser_list_columns: Some(ListColumns {
+            name: None,
+            mode: 110,
+            size: 80,
+            kind: 95,
+            modified: 140,
+        }),
+        chooser_list_columns: Some(ListColumns {
+            name: Some(280),
+            mode: 100,
+            size: 72,
+            kind: 90,
+            modified: 130,
+        }),
     }
 }
 

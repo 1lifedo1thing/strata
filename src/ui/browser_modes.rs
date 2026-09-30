@@ -43,15 +43,57 @@ struct ListColumnLayout {
     cells: Rc<Vec<RefCell<Vec<glib::WeakRef<gtk::Widget>>>>>,
     name_manually_resized: Rc<Cell<bool>>,
     scale: Rc<Cell<f64>>,
+    chooser: bool,
 }
 
 impl ListColumnLayout {
-    fn new() -> Self {
+    fn new(browser: &Browser) -> Self {
+        let chooser = browser.is_chooser_mode();
+        let preferences = super::preferences::PreferenceManager::shared();
+        let saved = if chooser {
+            preferences.chooser_list_columns()
+        } else {
+            preferences.browser_list_columns()
+        };
+        let widths = saved.map_or(LIST_COLUMN_WIDTHS, |saved| {
+            let mut widths = [
+                saved.name.unwrap_or(LIST_COLUMN_WIDTHS[0]),
+                saved.mode,
+                saved.size,
+                saved.kind,
+                saved.modified,
+            ];
+            for (index, width) in widths.iter_mut().enumerate() {
+                *width = list_column_width(index, *width);
+            }
+            widths
+        });
         Self {
-            widths: Rc::new(LIST_COLUMN_WIDTHS.into_iter().map(Cell::new).collect()),
+            widths: Rc::new(widths.into_iter().map(Cell::new).collect()),
             cells: Rc::new((0..5).map(|_| RefCell::new(Vec::new())).collect()),
-            name_manually_resized: Rc::new(Cell::new(false)),
+            name_manually_resized: Rc::new(Cell::new(
+                saved.is_some_and(|saved| saved.name.is_some()),
+            )),
             scale: Rc::new(Cell::new(1.0)),
+            chooser,
+        }
+    }
+
+    fn remember(&self) {
+        let scale = self.scale.get();
+        let unscaled = |index: usize| (f64::from(self.widths[index].get()) / scale).round() as i32;
+        let saved = Some(super::preferences::ListColumns {
+            name: self.name_manually_resized.get().then(|| unscaled(0)),
+            mode: unscaled(1),
+            size: unscaled(2),
+            kind: unscaled(3),
+            modified: unscaled(4),
+        });
+        let preferences = super::preferences::PreferenceManager::shared();
+        if self.chooser {
+            preferences.set_chooser_list_columns(saved);
+        } else {
+            preferences.set_browser_list_columns(saved);
         }
     }
 }
@@ -2690,16 +2732,17 @@ fn list_headings(
         arrows: RefCell::default(),
     });
 
-    for (index, (text, key, width)) in [
-        ("Name", Some(SortKey::Name), LIST_COLUMN_WIDTHS[0]),
-        ("Mode", None, LIST_COLUMN_WIDTHS[1]),
-        ("Size", Some(SortKey::Size), LIST_COLUMN_WIDTHS[2]),
-        ("Type", Some(SortKey::Type), LIST_COLUMN_WIDTHS[3]),
-        ("Modified", Some(SortKey::Modified), LIST_COLUMN_WIDTHS[4]),
+    for (index, (text, key)) in [
+        ("Name", Some(SortKey::Name)),
+        ("Mode", None),
+        ("Size", Some(SortKey::Size)),
+        ("Type", Some(SortKey::Type)),
+        ("Modified", Some(SortKey::Modified)),
     ]
     .into_iter()
     .enumerate()
     {
+        let width = columns.widths[index].get();
         let cell = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         cell.add_css_class("list-heading-cell");
         register_list_column_cell(&columns, index, &cell);
@@ -2845,6 +2888,7 @@ fn column_resize_handle(
                 index,
                 list_column_width(index, natural),
             );
+            columns_for_autofit.remember();
             gesture.set_state(gtk::EventSequenceState::Denied);
             return;
         }
@@ -2875,6 +2919,7 @@ fn column_resize_handle(
         let width = (f64::from(starting_width.get()) + offset_x).round() as i32;
         set_list_column_width(&columns_for_update, index, list_column_width(index, width));
     });
+    resize.connect_drag_end(move |_, _, _| columns.remember());
     handle.add_controller(resize);
     handle
 }
@@ -3000,7 +3045,7 @@ fn build_list_pane(
     }
     let (filter_entry, filter_revealer, filter_button) = filter_controls("Filter list (Ctrl+F)");
     actions.append(&filter_button);
-    let columns = ListColumnLayout::new();
+    let columns = ListColumnLayout::new(&browser);
     let (shell, header, content, model, stack, status, spinner, truncated_hint) = pane_base(
         title,
         BrowserMode::List,
