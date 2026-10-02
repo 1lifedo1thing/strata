@@ -841,8 +841,7 @@ pub(super) fn build_appearance_menu(
     preview_toggle.add_css_class("appearance-option");
     preview_toggle.add_css_class("preview-panel-option");
     super::accessibility::set_label(&preview_toggle, "Preview panel");
-    let shortcut_label = preview_shortcut.clone();
-    let description_toggle = preview_toggle.clone();
+    let description_toggle = preview_toggle.downgrade();
     preferences.bind_preference(
         &preview_shortcut,
         |preferences| {
@@ -851,17 +850,22 @@ pub(super) fn build_appearance_menu(
                 preferences,
             )
         },
-        move |_, text| {
-            shortcut_label.set_text(text);
-            shortcut_label.set_visible(!text.is_empty());
-            crate::ui::accessibility::set_description(
-                &description_toggle,
-                Some(&if text.is_empty() {
-                    "Toggle preview panel while browsing".to_owned()
-                } else {
-                    format!("Toggle preview panel while browsing ({text})")
-                }),
-            );
+        move |widget, text| {
+            let shortcut = widget
+                .downcast_ref::<gtk::Label>()
+                .expect("preview shortcut label");
+            shortcut.set_text(text);
+            shortcut.set_visible(!text.is_empty());
+            if let Some(toggle) = description_toggle.upgrade() {
+                crate::ui::accessibility::set_description(
+                    &toggle,
+                    Some(&if text.is_empty() {
+                        "Toggle preview panel while browsing".to_owned()
+                    } else {
+                        format!("Toggle preview panel while browsing ({text})")
+                    }),
+                );
+            }
         },
     );
     let actions = gio::SimpleActionGroup::new();
