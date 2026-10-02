@@ -35,6 +35,7 @@ use super::{
     preferences::PreferenceManager,
 };
 
+mod bookmarks;
 mod composition;
 mod device_release;
 mod devices;
@@ -1187,6 +1188,7 @@ pub(super) struct SidebarView {
         reason = "held so Drop keeps this window registered for pending-release rebuilds"
     )]
     release_watch: device_release::SidebarWatch,
+    bookmark_watch: RefCell<Option<crate::adapters::bookmarks::BookmarkWatch>>,
 }
 
 impl SidebarView {
@@ -1239,6 +1241,7 @@ impl SidebarView {
     }
 
     pub(super) fn disconnect(&self) {
+        self.bookmark_watch.take();
         for handler in self.handlers.take() {
             self.state.volume_monitor.disconnect(handler);
         }
@@ -3891,7 +3894,7 @@ fn sidebar_update_label(release: &ReleaseMetadata) -> String {
 }
 
 fn pinned_places_path() -> PathBuf {
-    glib::user_config_dir().join("gtk-3.0/bookmarks")
+    crate::adapters::bookmarks::pinned_places_path()
 }
 
 fn load_pinned_places() -> std::io::Result<Vec<(Location, String)>> {
