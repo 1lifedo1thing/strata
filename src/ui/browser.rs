@@ -74,7 +74,7 @@ pub(crate) use crate::ui::browser::clipboard::{
     locations_from_file_list_value, prepare_file_drop_target,
 };
 pub(crate) use crate::ui::browser::collection::{
-    ActivePaneFilter, debounce_filter_entry, detach_collection_view, filter_placeholder,
+    ActivePaneFilter, bind_listing_filter, detach_collection_view, filter_placeholder,
     focus_collection_item_when_allocated, focus_filter_entry, notify_filter_query,
     prepare_collection_inline_edit, restore_filter_controls, reveal_collection_after_layout,
     scroll_collection_when_allocated, search_result_entry,
@@ -644,6 +644,7 @@ impl BrowserView {
             send_to_menu_test_override: RefCell::new(None),
             browser,
         });
+        find::register_highlight_view(&state);
 
         let weak_state = Rc::downgrade(&state);
         *pending_submit.borrow_mut() = Some(Rc::new(move || {

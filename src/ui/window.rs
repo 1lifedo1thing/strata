@@ -164,7 +164,6 @@ pub(super) fn chooser_keys(
                 preferences: PreferenceManager::shared(),
             },
             shortcuts: shortcuts.clone(),
-            folders: Rc::new(super::go_completion::GioFolders),
             history: crate::services::NavigationHistory::shared(),
         },
         policy,
