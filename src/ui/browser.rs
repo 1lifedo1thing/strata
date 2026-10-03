@@ -1678,6 +1678,114 @@ impl BrowserView {
         (!order.is_empty()).then_some(order)
     }
 
+    pub(crate) fn displayed_entries_matching(
+        &self,
+        depth: usize,
+        keep: impl Fn(&FileEntry) -> bool,
+    ) -> Vec<FileEntry> {
+        if let Some(results) = self.filter_target().and_then(|target| target.results()) {
+            return results
+                .iter()
+                .map(search_result_entry)
+                .filter(keep)
+                .collect();
+        }
+        let order = self.displayed_order(depth);
+        self.state
+            .browser
+            .with_column_entries(depth, |entries| match order {
+                Some(order) => order
+                    .iter()
+                    .filter_map(|position| entries.get(*position))
+                    .filter(|entry| keep(entry))
+                    .cloned()
+                    .collect(),
+                None => entries
+                    .iter()
+                    .filter(|entry| keep(entry))
+                    .cloned()
+                    .collect(),
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn displayed_cursor_entry(&self, depth: usize) -> Option<FileEntry> {
+        if let Some(target) = self
+            .filter_target()
+            .filter(|target| target.results_view().is_some())
+        {
+            return target.current_result().as_ref().map(search_result_entry);
+        }
+        self.state.browser.cursor_entry(depth)
+    }
+
+    /// `key` supplies the keyboard scroll direction; `None` preserves pointer navigation.
+    pub(crate) fn step_to(&self, depth: usize, location: &Location, key: Option<i32>) -> bool {
+        if let Some(target) = self.filter_target()
+            && let Some(results) = target.results()
+        {
+            let Some(position) = results
+                .iter()
+                .position(|item| search_result_entry(item).location == *location)
+            else {
+                return false;
+            };
+            let cursor = target.hits().and_then(|hits| hits.cursor);
+            let delta = position as i32 - cursor.unwrap_or(0) as i32;
+            if key.is_some() {
+                self.keyboard_navigation();
+            }
+            if cursor.is_none() {
+                target.step(1, 0, key.is_some());
+            }
+            return self.step_filter_results(
+                delta.signum(),
+                delta.unsigned_abs() as usize,
+                key.is_some(),
+            );
+        }
+        let Some(position) = self
+            .state
+            .browser
+            .with_column_entries(depth, |entries| {
+                entries.iter().position(|entry| entry.location == *location)
+            })
+            .flatten()
+        else {
+            return false;
+        };
+        if key.is_some() {
+            self.keyboard_navigation();
+        }
+        let collection = self
+            .state
+            .overlay
+            .root()
+            .and_then(|root| root.focus())
+            .as_ref()
+            .and_then(super::scrolling::focused_collection);
+        if crate::ui::preferences::PreferenceManager::shared().tenxer_mode() {
+            let order = self.displayed_order(depth);
+            self.state
+                .browser
+                .place_cursor(depth, position, order.as_deref());
+        } else {
+            self.state.browser.select(depth, position);
+        }
+        self.state.mirror_focused_folder(depth, Some(position));
+        if let (Some(direction), Some((view, scroll))) = (key, collection) {
+            let position = self.cursor_view_position(&view);
+            super::scrolling::reveal_cursor(
+                &view,
+                &scroll,
+                direction,
+                super::scrolling::CursorMotion::Step,
+                position,
+            );
+        }
+        true
+    }
+
     fn focused_listing_depth(&self) -> Option<usize> {
         if self.view_mode() == BrowserMode::Columns {
             self.state
