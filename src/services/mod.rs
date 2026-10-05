@@ -101,5 +101,6 @@ pub(crate) use update_check::{
     ReleaseMetadata, ReleaseNotes, UpdateCheck, check_for_updates, fetch_release_notes,
 };
 pub(crate) use update_install::{
-    InstallRequest, UpdateInstall, UpdateMethod, install_update, update_method,
+    InstallCancel, InstallRequest, UpdateInstall, UpdateMethod, install_update, rollback_path,
+    update_method,
 };
