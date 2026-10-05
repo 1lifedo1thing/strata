@@ -1196,7 +1196,7 @@ fn event_changes_trash_contents(event: &BrowserEvent) -> bool {
     matches!(
         event,
         BrowserEvent::DeletionFinished { .. }
-            | BrowserEvent::RestorationFinished
+            | BrowserEvent::RestorationFinished { .. }
             | BrowserEvent::TransferFinished { .. }
             | BrowserEvent::OperationCompletedWithErrors { .. }
             | BrowserEvent::OperationCancelled { .. }

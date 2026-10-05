@@ -18,15 +18,20 @@ use crate::{
 
 use super::{FileProgressView, TransferProgressSnapshot};
 
+type DismissWaiters = Rc<RefCell<Vec<Box<dyn FnOnce()>>>>;
+
 pub(in crate::ui::browser) struct FileProgressState {
     pub(in crate::ui::browser) overlay: gtk::Overlay,
     pub(in crate::ui::browser) file_progress_view: RefCell<Option<FileProgressView>>,
+    pub(super) file_progress_dismissing: Rc<Cell<usize>>,
+    pub(super) file_progress_dismiss_waiters: DismissWaiters,
     pub(in crate::ui::browser) pending_file_progress: RefCell<Option<glib::SourceId>>,
     pub(in crate::ui::browser) file_operation_progress: Cell<(usize, usize)>,
     pub(in crate::ui::browser) archive_progress: Cell<Option<(usize, usize)>>,
     pub(in crate::ui::browser) archive_compressing: Cell<bool>,
     pub(in crate::ui::browser) deleting: Cell<bool>,
     pub(in crate::ui::browser) transfer_progress: Cell<Option<TransferProgressSnapshot>>,
+    pub(super) transfer_render_source: RefCell<Option<glib::SourceId>>,
     pub(in crate::ui::browser) transfer_current_file: RefCell<Option<String>>,
     pub(in crate::ui::browser) transfer_rate_sample: Cell<Option<(std::time::Instant, u64)>>,
     pub(in crate::ui::browser) transfer_rate_bytes_per_second: Cell<Option<f64>>,
@@ -44,12 +49,15 @@ impl FileProgressState {
         Self {
             overlay: overlay.clone(),
             file_progress_view: RefCell::new(None),
+            file_progress_dismissing: Rc::new(Cell::new(0)),
+            file_progress_dismiss_waiters: Rc::new(RefCell::new(Vec::new())),
             pending_file_progress: RefCell::new(None),
             file_operation_progress: Cell::new((0, 0)),
             archive_progress: Cell::new(None),
             archive_compressing: Cell::new(false),
             deleting: Cell::new(false),
             transfer_progress: Cell::new(None),
+            transfer_render_source: RefCell::new(None),
             transfer_current_file: RefCell::new(None),
             transfer_rate_sample: Cell::new(None),
             transfer_rate_bytes_per_second: Cell::new(None),
@@ -155,6 +163,9 @@ impl ViewState {
         let progress = self
             .progress_state
             .replace(Rc::new(FileProgressState::new(&self.overlay)));
+        if deleting {
+            self.pending_file_operation_animation.take();
+        }
         if deleting
             && self.delete_dissolve_request.get().is_none()
             && self.pending_delete_dissolve.borrow().is_some()
