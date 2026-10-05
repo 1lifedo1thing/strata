@@ -10,8 +10,8 @@ use crate::ui::{
         ViewState,
         clipboard::{
             ClipboardMark, PreparedFileDrop, clipboard_mark, drag_actions_for_modifiers,
-            drag_icon_with_count, file_drag_content, file_drop_action, file_drop_commit,
-            locations_from_file_list_value, prepare_file_drop_target,
+            drag_preview_icon, file_drag_content, file_drag_hover_target, file_drop_action,
+            file_drop_commit, locations_from_file_list_value, prepare_file_drop_target,
         },
         collection::{ViewMap, activate_recursive_search_result},
         entry::{
@@ -22,7 +22,11 @@ use crate::ui::{
     browser_modes::BrowserMode,
     modal::slide_in_down,
 };
-use crate::{model::FileEntry, services::SearchItem};
+use crate::{
+    model::{FileEntry, Location},
+    services::SearchItem,
+    ui::browser::arm_spring_load_navigation,
+};
 use gtk::{glib, prelude::*};
 use std::{
     cell::{Cell, RefCell},
@@ -78,7 +82,6 @@ pub(super) fn column_rows(
         row.add_css_class("file-row");
         let icon = crate::ui::thumbnail::ThumbnailSlot::new(17);
         icon.add_css_class("file-icon");
-        let drag_icon = icon.clone();
         icon.set_valign(gtk::Align::Center);
         let label = gtk::Label::builder()
             .halign(gtk::Align::Fill)
@@ -187,13 +190,8 @@ pub(super) fn column_rows(
                 } else {
                     vec![entry]
                 };
-                if let Some((texture, hot_x, hot_y)) =
-                    drag_icon_with_count(drag_icon.upcast_ref(), entries.len())
-                {
+                if let Some((texture, hot_x, hot_y)) = drag_preview_icon(&prepare_row, &entries) {
                     source.set_icon(Some(&texture), hot_x, hot_y);
-                } else {
-                    let paintable = gtk::WidgetPaintable::new(Some(&prepare_row));
-                    source.set_icon(Some(&paintable), x.round() as i32, y.round() as i32);
                 }
                 file_drag_content(&entries)
             });
@@ -241,49 +239,68 @@ pub(super) fn column_rows(
                 target: drop,
                 state: drop_state,
             } = prepare_file_drop_target(dest_for_row);
+            let spring_navigate: Rc<dyn Fn(Location)> = {
+                let weak_state = weak_state.clone();
+                Rc::new(move |location| {
+                    if let Some(state) = weak_state.upgrade() {
+                        state.browser.descend(depth, location);
+                    }
+                })
+            };
             let highlighted_row = row.downgrade();
             let state_for_enter = drop_state.clone();
+            let navigate_for_enter = spring_navigate.clone();
             drop.connect_enter(move |target, _, _| {
                 let action = file_drop_action(target, &state_for_enter);
+                let hovered = file_drag_hover_target(&state_for_enter, target).is_some();
                 if let Some(row) = highlighted_row.upgrade() {
-                    if action.is_empty() {
-                        row.remove_css_class("drop-destination");
-                    } else {
+                    if hovered {
                         row.add_css_class("drop-destination");
+                    } else {
+                        row.remove_css_class("drop-destination");
                     }
                 }
+                arm_spring_load_navigation(&state_for_enter, target, &navigate_for_enter);
                 action
             });
             let highlighted_row = row.downgrade();
             let state_for_motion = drop_state.clone();
+            let navigate_for_motion = spring_navigate.clone();
             drop.connect_motion(move |target, _, _| {
                 let action = file_drop_action(target, &state_for_motion);
+                let hovered = file_drag_hover_target(&state_for_motion, target).is_some();
                 if let Some(row) = highlighted_row.upgrade() {
-                    if action.is_empty() {
-                        row.remove_css_class("drop-destination");
-                    } else {
+                    if hovered {
                         row.add_css_class("drop-destination");
+                    } else {
+                        row.remove_css_class("drop-destination");
                     }
                 }
+                arm_spring_load_navigation(&state_for_motion, target, &navigate_for_motion);
                 action
             });
             let highlighted_row = row.downgrade();
             let state_for_value = drop_state.clone();
+            let navigate_for_value = spring_navigate.clone();
             drop.connect_value_notify(move |target| {
                 if target.current_drop().is_none() {
                     return;
                 }
-                let action = file_drop_action(target, &state_for_value);
+                file_drop_action(target, &state_for_value);
+                let hovered = file_drag_hover_target(&state_for_value, target).is_some();
                 if let Some(row) = highlighted_row.upgrade() {
-                    if action.is_empty() {
-                        row.remove_css_class("drop-destination");
-                    } else {
+                    if hovered {
                         row.add_css_class("drop-destination");
+                    } else {
+                        row.remove_css_class("drop-destination");
                     }
                 }
+                arm_spring_load_navigation(&state_for_value, target, &navigate_for_value);
             });
             let highlighted_row = row.downgrade();
+            let state_for_leave = drop_state.clone();
             drop.connect_leave(move |_| {
+                state_for_leave.cancel_spring_load_navigation();
                 if let Some(row) = highlighted_row.upgrade() {
                     row.remove_css_class("drop-destination");
                 }
@@ -315,6 +332,7 @@ pub(super) fn column_rows(
                 let Some(dropped_row) = dropped_row.upgrade() else {
                     return false;
                 };
+                drop_state.cancel_spring_load_navigation();
                 dropped_row.remove_css_class("drop-destination");
                 let Some(state) = weak_state_for_drop.upgrade() else {
                     return false;

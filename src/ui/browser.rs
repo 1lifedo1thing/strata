@@ -67,13 +67,14 @@ mod trash;
 
 #[cfg(test)]
 pub(super) use crate::ui::browser::clipboard::clipboard_mark;
-pub(in crate::ui) use crate::ui::browser::clipboard::drag_icon_with_count;
+pub(in crate::ui) use crate::ui::browser::clipboard::drag_preview_icon;
 pub(super) use crate::ui::browser::clipboard::{
     ClipboardMark, ClipboardMarks, file_drag_content, mark_in, set_mark_result_style,
 };
 pub(crate) use crate::ui::browser::clipboard::{
-    PreparedFileDrop, drag_actions_for_modifiers, file_drop_action, file_drop_commit,
-    locations_from_file_list_value, prepare_file_drop_target,
+    PreparedFileDrop, arm_spring_load_navigation, drag_actions_for_modifiers,
+    file_drag_hover_target, file_drop_action, file_drop_commit, locations_from_file_list_value,
+    prepare_file_drop_target,
 };
 pub(crate) use crate::ui::browser::collection::{
     ActivePaneFilter, bind_listing_filter, detach_collection_view, filter_placeholder,
