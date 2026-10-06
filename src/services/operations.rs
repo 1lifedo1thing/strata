@@ -244,6 +244,13 @@ pub struct CancelledOperation {
     pub affected_locations: HashSet<Location>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PasswordFailure {
+    Required,
+    /// Includes ambiguous decryption failures that may instead indicate damaged data.
+    Incorrect,
+}
+
 #[derive(Clone, Debug)]
 pub enum OperationEvent {
     Renamed {
@@ -336,6 +343,7 @@ pub enum OperationEvent {
     Failed {
         request_id: OperationRequestId,
         message: String,
+        password_failure: Option<PasswordFailure>,
     },
     Compressed {
         request_id: OperationRequestId,

@@ -26,6 +26,7 @@ mod operations;
 mod preferences;
 mod recent;
 mod relocation;
+mod reveal;
 mod selection;
 #[path = "sorting/tests.rs"]
 mod staged_sort;
@@ -53,7 +54,7 @@ fn assert_invalid_creation_is_rejected(name: &str, create: impl FnOnce(&Rc<Brows
     assert!(browser.operation_load.borrow().is_none());
     assert!(matches!(
         events.borrow().as_slice(),
-        [BrowserEvent::OperationFailed { message }] if message == expected
+        [BrowserEvent::OperationFailed { message, .. }] if message == expected
     ));
 }
 
@@ -573,6 +574,7 @@ impl OperationProvider for ImmediateOperationProvider {
             Some(ForwardRenameOutcome::Failed) => emit(OperationEvent::Failed {
                 request_id: request.id,
                 message: "rename failed".to_owned(),
+                password_failure: None,
             }),
             Some(ForwardRenameOutcome::Cancelled) => emit(OperationEvent::Cancelled {
                 request_id: request.id,
