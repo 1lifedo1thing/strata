@@ -18,45 +18,155 @@ mod tests;
 struct ModalFocusOrigin {
     widget: Option<glib::WeakRef<gtk::Widget>>,
     restore: RefCell<Option<Rc<dyn Fn()>>>,
+    /// False when the first dialog of a chain changes the listing; dialogs chained on
+    /// it inherit that and return focus through the window fallback too.
+    allow_widget: bool,
 }
 
-type FocusOrigins = Vec<(glib::WeakRef<gtk::Box>, Rc<ModalFocusOrigin>)>;
+type FocusOrigins = Vec<(glib::WeakRef<gtk::Widget>, Rc<ModalFocusOrigin>)>;
+type FocusFallbacks = Vec<(glib::WeakRef<gtk::Window>, Rc<dyn Fn()>)>;
 
 thread_local! {
     static MODAL_FOCUS_ORIGINS: RefCell<FocusOrigins> = const { RefCell::new(Vec::new()) };
+    static MODAL_FOCUS_FALLBACKS: RefCell<FocusFallbacks> = const { RefCell::new(Vec::new()) };
 }
 
-pub(super) fn remember_modal_focus(layer: &gtk::Box, overlay: &gtk::Overlay) -> Rc<Cell<bool>> {
-    let window = overlay.root().and_downcast::<gtk::Window>();
-    let previous = window
-        .as_ref()
-        .and_then(crate::ui::window::visible_modal_layer);
-    let origin = MODAL_FOCUS_ORIGINS.with(|origins| {
+/// Sets where focus goes when a dismissed overlay leaves `window` without a
+/// focused widget, normally the browser's file view.
+pub(crate) fn set_modal_focus_fallback(window: &gtk::Window, fallback: Rc<dyn Fn()>) {
+    MODAL_FOCUS_FALLBACKS.with(|fallbacks| {
+        let mut fallbacks = fallbacks.borrow_mut();
+        fallbacks.retain(|(candidate, _)| {
+            candidate
+                .upgrade()
+                .is_some_and(|candidate| candidate != *window)
+        });
+        fallbacks.push((window.downgrade(), fallback));
+    });
+}
+
+fn modal_focus_fallback(window: &gtk::Window) -> Option<Rc<dyn Fn()>> {
+    MODAL_FOCUS_FALLBACKS.with(|fallbacks| {
+        let mut fallbacks = fallbacks.borrow_mut();
+        fallbacks.retain(|(candidate, _)| candidate.upgrade().is_some());
+        fallbacks
+            .iter()
+            .find(|(candidate, _)| {
+                candidate
+                    .upgrade()
+                    .is_some_and(|candidate| candidate == *window)
+            })
+            .map(|(_, fallback)| fallback.clone())
+    })
+}
+
+/// Records the window focus for `layer`, or the browser origin of the modal it is chained on.
+fn register_focus_origin(
+    layer: &gtk::Widget,
+    window: Option<&gtk::Window>,
+    allow_widget: bool,
+) -> Rc<ModalFocusOrigin> {
+    let previous = window.and_then(crate::ui::window::visible_modal_layer);
+    MODAL_FOCUS_ORIGINS.with(|origins| {
         let mut origins = origins.borrow_mut();
         origins.retain(|(layer, _)| layer.upgrade().is_some());
         // Chained dialogs inherit the browser origin, not the preceding modal's focus.
-        let origin = if let Some(previous) = previous {
-            origins.iter().find_map(|(layer, origin)| {
-                layer
-                    .upgrade()
-                    .filter(|layer| layer.upcast_ref::<gtk::Widget>() == &previous)
-                    .map(|_| origin.clone())
+        let origin = previous
+            .and_then(|previous| {
+                origins.iter().find_map(|(layer, origin)| {
+                    layer
+                        .upgrade()
+                        .filter(|layer| *layer == previous)
+                        .map(|_| origin.clone())
+                })
             })
-        } else {
-            None
-        }
-        .unwrap_or_else(|| {
-            Rc::new(ModalFocusOrigin {
-                widget: window
-                    .as_ref()
-                    .and_then(gtk::prelude::RootExt::focus)
-                    .map(|focus| focus.downgrade()),
-                restore: RefCell::new(None),
-            })
-        });
+            .unwrap_or_else(|| {
+                Rc::new(ModalFocusOrigin {
+                    widget: window
+                        .and_then(gtk::prelude::RootExt::focus)
+                        .map(|focus| focus.downgrade()),
+                    restore: RefCell::new(None),
+                    allow_widget,
+                })
+            });
         origins.push((layer.downgrade(), origin.clone()));
         origin
+    })
+}
+
+fn forget_focus_origin(layer: &gtk::Widget) {
+    MODAL_FOCUS_ORIGINS.with(|origins| {
+        origins.borrow_mut().retain(|(candidate, _)| {
+            candidate
+                .upgrade()
+                .is_some_and(|candidate| candidate != *layer)
+        });
     });
+}
+
+/// Priority: focus taken meanwhile, explicit restore, on-screen origin, window fallback.
+fn restore_modal_focus(window: &gtk::Window, origin: &ModalFocusOrigin, allow_origin: bool) {
+    if gtk::prelude::RootExt::focus(window).is_some_and(|focus| focus.is_mapped()) {
+        return;
+    }
+    let restore = origin.restore.borrow().clone();
+    if let Some(restore) = restore {
+        restore();
+        return;
+    }
+    if allow_origin
+        && origin.allow_widget
+        && let Some(widget) = origin.widget.as_ref().and_then(glib::WeakRef::upgrade)
+        && shown_or_revealing(&widget)
+        && widget.is_sensitive()
+        && widget.root().as_ref() == Some(window.upcast_ref())
+        && widget.grab_focus()
+    {
+        return;
+    }
+    if let Some(fallback) = modal_focus_fallback(window) {
+        fallback();
+    }
+}
+
+/// Whether `widget` is on screen or is mapped by the next frame: an opening revealer,
+/// such as a just-shown filter field's, maps its child only on its first animation
+/// tick, which a slow paint can delay until after an overlay opened over it closes.
+fn shown_or_revealing(widget: &gtk::Widget) -> bool {
+    let mut current = widget.clone();
+    while !current.is_mapped() {
+        let Some(parent) = current.parent() else {
+            return false;
+        };
+        let revealing = parent
+            .downcast_ref::<gtk::Revealer>()
+            .is_some_and(gtk::Revealer::reveals_child);
+        if !current.is_visible() || !(current.is_child_visible() || revealing) {
+            return false;
+        }
+        current = parent;
+    }
+    true
+}
+
+pub(super) fn remember_modal_focus(layer: &gtk::Box, overlay: &gtk::Overlay) -> Rc<Cell<bool>> {
+    remember_removed_modal_focus(layer, overlay, true)
+}
+
+/// [`remember_modal_focus`] for dialogs whose work changes the listing, such as
+/// file-operation progress: closing it hands focus to the browser cursor through the
+/// window fallback, never to the row widget that was focused when it opened.
+pub(super) fn remember_modal_focus_for_listing(layer: &gtk::Box, overlay: &gtk::Overlay) {
+    remember_removed_modal_focus(layer, overlay, false);
+}
+
+fn remember_removed_modal_focus(
+    layer: &gtk::Box,
+    overlay: &gtk::Overlay,
+    allow_origin: bool,
+) -> Rc<Cell<bool>> {
+    let window = overlay.root().and_downcast::<gtk::Window>();
+    let origin = register_focus_origin(layer.upcast_ref(), window.as_ref(), allow_origin);
     let overlay = overlay.downgrade();
     let restore = Rc::new(Cell::new(true));
     let restore_on_close = restore.clone();
@@ -64,13 +174,7 @@ pub(super) fn remember_modal_focus(layer: &gtk::Box, overlay: &gtk::Overlay) -> 
         if layer.parent().is_some() {
             return;
         }
-        MODAL_FOCUS_ORIGINS.with(|origins| {
-            origins.borrow_mut().retain(|(candidate, _)| {
-                candidate
-                    .upgrade()
-                    .is_some_and(|candidate| candidate != *layer)
-            });
-        });
+        forget_focus_origin(layer.upcast_ref());
         if !layer.has_css_class("dismissing") || !restore_on_close.get() {
             return;
         }
@@ -85,15 +189,41 @@ pub(super) fn remember_modal_focus(layer: &gtk::Box, overlay: &gtk::Overlay) -> 
         if crate::ui::window::visible_modal_layer(&window).is_some() {
             return;
         }
-        let restore = origin.restore.borrow().clone();
-        if let Some(restore) = restore {
-            restore();
-        } else if let Some(origin) = origin.widget.as_ref().and_then(glib::WeakRef::upgrade)
-            && origin.is_mapped()
-            && origin.root().as_ref() == Some(window.upcast_ref())
-        {
-            origin.grab_focus();
+        restore_modal_focus(&window, &origin, allow_origin);
+    });
+    restore
+}
+
+/// [`remember_modal_focus`] for layers hidden with `set_visible(false)` rather than
+/// removed, such as Settings and the search palettes. The origin is captured each
+/// time the layer becomes visible and restored when a `dismissing` hide completes.
+/// The returned flag is re-armed on every show; clear it to skip the origin and
+/// fall back to the browser (an activation that already moved focus keeps it).
+pub(crate) fn remember_persistent_modal_focus(layer: &gtk::Widget) -> Rc<Cell<bool>> {
+    let restore = Rc::new(Cell::new(true));
+    let shown: RefCell<Option<Rc<ModalFocusOrigin>>> = RefCell::new(None);
+    let restore_on_hide = restore.clone();
+    layer.connect_visible_notify(move |layer| {
+        let window = layer.root().and_downcast::<gtk::Window>();
+        if layer.is_visible() {
+            restore_on_hide.set(true);
+            forget_focus_origin(layer);
+            shown.replace(Some(register_focus_origin(layer, window.as_ref(), true)));
+            return;
         }
+        let Some(origin) = shown.take() else {
+            return;
+        };
+        forget_focus_origin(layer);
+        let Some(window) = window else {
+            return;
+        };
+        if !layer.has_css_class("dismissing")
+            || crate::ui::window::visible_modal_layer(&window).is_some()
+        {
+            return;
+        }
+        restore_modal_focus(&window, &origin, restore_on_hide.get());
     });
     restore
 }
@@ -103,7 +233,7 @@ pub(super) fn set_modal_focus_restore(layer: &gtk::Widget, restore: Rc<dyn Fn()>
         if let Some((_, origin)) = origins.borrow().iter().find(|(candidate, _)| {
             candidate
                 .upgrade()
-                .is_some_and(|candidate| candidate.upcast_ref::<gtk::Widget>() == layer)
+                .is_some_and(|candidate| candidate == *layer)
         }) {
             origin.restore.replace(Some(restore));
         }
@@ -452,12 +582,8 @@ fn show_message_dialog(
     close.grab_focus();
 }
 
-/// Like [`show_error_dialog`], but for a `Completed with errors` delete
-/// result where every failure was caused by the destination not supporting
-/// Trash (issue #179): rather than a dead-end "Done" button, this offers an
-/// actionable "Delete Permanently" button that invokes `on_retry` -- the
-/// caller's job is to re-run the delete for just the retryable entries,
-/// e.g. via `show_delete_confirmation(retryable_entries)`.
+/// For a delete that completed with errors, some of them Trash-unsupported: offers
+/// Delete Permanently for those entries via `on_retry` (#179).
 pub(super) fn show_delete_error_dialog(
     parent: &impl IsA<gtk::Widget>,
     detail: &str,

@@ -50,18 +50,81 @@ def test_toolbar_controls_are_named(strata):
         assert strata.window.find(name=name) is not None, f"{name!r} is unnamed"
 
 
-def test_focus_order_reaches_the_files_from_the_header(strata):
-    """Tab from the window's first control eventually reaches the listing."""
+@pytest.mark.parametrize("mode", ALL_MODES)
+def test_focus_order_reaches_the_files_from_the_header(strata, mode):
+    """Tab from the window's first control reaches the listing, which is one named stop."""
 
+    root = strata.fixture.root.name
     strata.keyboard.press("Tab")
     seen = []
-    for _ in range(20):
+    for _ in range(40):
         focused = strata.focused_node()
-        if focused is None:
-            strata.keyboard.press("Tab")
-            continue
-        seen.append(f"{focused.role}:{focused.name}")
-        if focused.role in ("list", "table") or strata.focused_name() is not None:
-            return
+        if focused is not None:
+            seen.append(f"{focused.role}:{focused.name}")
+            if strata.focused_name() is not None:
+                break
         strata.keyboard.press("Tab")
-    raise AssertionError(f"Tab never reached the file listing; visited {seen}")
+    else:
+        raise AssertionError(f"Tab never reached a file entry; visited {seen}")
+    assert strata.focused_name() in ROOT_ENTRIES
+    container = strata.entry_container(root)
+    assert container is not None
+    assert container.name == root
+    assert container.description == "Files"
+    assert container.find(states={"focused"}) is not None
+
+    strata.keyboard.press("Tab")
+    strata.wait(
+        lambda: container.find(states={"focused"}) is None,
+        "one Tab to leave the listing",
+        timeout=5,
+    )
+    outside = strata.focused_node()
+    assert outside is not None and outside.name, f"Tab left for an unnamed stop: {outside}"
+
+
+def _focus_outside(strata, surface):
+    node = strata.focused_node()
+    if node is None or not node.name or node == surface:
+        return None
+    if any(ancestor == surface for ancestor in node.ancestors()):
+        return None
+    return node
+
+
+@pytest.mark.parametrize("entry", ["keyboard", "pointer"])
+@pytest.mark.parametrize("mode", ALL_MODES)
+def test_empty_directory_keeps_focus_and_tab_order(strata, mode, entry):
+    strata.fixture.path("empty").mkdir()
+    strata.keyboard.press("F5")
+    strata.entry("empty")
+    if entry == "keyboard":
+        strata.select_entry_with_keyboard("empty")
+        strata.keyboard.press("Return")
+    elif mode == "Columns":
+        strata.click_entry("empty")
+    else:
+        strata.double_click_entry("empty")
+    strata.wait_for_directory("empty")
+
+    surface = strata.wait(
+        lambda: (node := strata.focused_node()) is not None and node.name == "empty" and node,
+        "focus on the empty directory's pane surface",
+        timeout=5,
+    )
+    assert surface.description == "This directory is empty"
+
+    strata.keyboard.press("Tab")
+    strata.wait(lambda: _focus_outside(strata, surface), "Tab to leave the empty pane", timeout=5)
+    strata.keyboard.press("shift+Tab")
+    strata.wait(
+        lambda: strata.focused_node() == surface,
+        "Shift+Tab to return to the empty pane",
+        timeout=5,
+    )
+    strata.keyboard.press("shift+Tab")
+    strata.wait(
+        lambda: _focus_outside(strata, surface),
+        "Shift+Tab to reach the control before the empty pane",
+        timeout=5,
+    )

@@ -23,7 +23,7 @@ use crate::{
     app::{Browser, BrowserColumnSnapshot},
     model::{FileEntry, Location, MetadataValue, SortDirection, SortKey},
     services::DropCommit,
-    ui::browser::{ClipboardMark, ClipboardMarks, mark_in, paths::is_trash_location},
+    ui::browser::{ClipboardMark, ClipboardMarks, FilterFocus, mark_in, paths::is_trash_location},
 };
 
 mod events;
@@ -613,8 +613,11 @@ impl ModeViews {
         {
             return true;
         }
-        self.single_pane()
-            .is_some_and(|pane| pane.focus_view().grab_focus() || pane.stack.grab_focus())
+        self.focus_pane_surface()
+    }
+
+    pub fn focus_pane_surface(&self) -> bool {
+        self.single_pane().is_some_and(focus_pane_surface)
     }
 
     /// Use rendered rows: filtering, grouping, and resizing change the icons geometry.
@@ -915,14 +918,20 @@ impl ModeViews {
         }));
     }
 
-    pub fn filter_has_focus(&self) -> bool {
+    pub(in crate::ui) fn filter_focus(&self) -> Option<FilterFocus> {
         let focused = self.stack.root().and_then(|root| root.focus());
         // Previous-mode panes stay in the tree unmapped; a just-revealed field
         // can have focus before GTK maps it.
         self.visible_panes()
             .into_iter()
-            .filter_map(|pane| pane.filter_entry.as_ref())
-            .any(|entry| widget_has_focus(entry, focused.as_ref()))
+            .find_map(|pane| pane_filter_focus(pane, focused.as_ref()))
+    }
+
+    /// Whether the listing of `depth` holds focus, rather than its filter session.
+    pub(in crate::ui) fn listing_holds_focus(&self, depth: usize) -> bool {
+        self.panes_at(depth)
+            .iter()
+            .any(|pane| pane_holds_keyboard_focus(pane))
     }
 
     pub fn selected_search_result(&self) -> Option<FileEntry> {
@@ -1120,24 +1129,31 @@ impl ModeViews {
         }
     }
 
+    /// Dismisses the filter whose field or results have focus, and returns focus to the
+    /// directory cursor.
     pub fn dismiss_focused_filter(&self) -> bool {
         let focused = self.stack.root().and_then(|root| root.focus());
         let Some(pane) = self
-            .icons_panes
-            .iter()
-            .chain(self.list_pane.iter())
-            .find(|pane| {
-                pane.filter_entry
-                    .as_ref()
-                    .is_some_and(|entry| widget_has_focus(entry, focused.as_ref()))
-            })
+            .visible_panes()
+            .into_iter()
+            .find(|pane| pane_filter_focus(pane, focused.as_ref()).is_some())
         else {
             return false;
         };
         if let Some(button) = pane.filter_button.as_ref() {
             button.set_active(false);
         }
-        pane.focus_view().grab_focus();
+        // Show the listing now rather than after the debounce, so focus lands on it.
+        if pane.search.replaces_listing() {
+            pane.search.flush_query();
+        } else {
+            super::browser::notify_filter_query(&pane.filter, &pane.filter_query, String::new());
+        }
+        if self.rename_is_active() {
+            focus_pane_surface(pane);
+        } else {
+            self.focus_visible_pane(pane.depth);
+        }
         true
     }
 
@@ -1448,6 +1464,9 @@ impl ModeViews {
         };
         let mut target = match (current, direction.cmp(&0)) {
             (_, std::cmp::Ordering::Equal) => return None,
+            // A full jump is absolute even without a cursor, as in `NavigationState`.
+            (_, std::cmp::Ordering::Less) if page == usize::MAX => 0,
+            (_, std::cmp::Ordering::Greater) if page == usize::MAX => last,
             (None, std::cmp::Ordering::Less) => last,
             (None, _) => 0,
             (Some(current), std::cmp::Ordering::Less) => current.saturating_sub(page.max(1)),
@@ -1573,6 +1592,10 @@ impl ModeViews {
         else {
             return;
         };
+        if super::loading_skeleton::surface_takes_focus(&pane.stack) {
+            pane.stack.grab_focus();
+            return;
+        }
         let target = self
             .browser
             .focused_item()
@@ -1609,8 +1632,12 @@ impl ModeViews {
             focus_collection_item(&view, position);
         }
         let view = view.downgrade();
+        let stack = pane.stack.downgrade();
         glib::idle_add_local_once(move || {
             if let Some(view) = view.upgrade()
+                && stack
+                    .upgrade()
+                    .is_some_and(|stack| !super::loading_skeleton::surface_takes_focus(&stack))
                 && widget_has_focus(&view, view.root().and_then(|root| root.focus()).as_ref())
             {
                 if view
@@ -1788,6 +1815,7 @@ impl ModeViews {
             depth,
             &snapshot.location.display_name(),
         );
+        install_pane_surface(&pane, &self.browser, &snapshot.location.display_name());
         configure_icons_density(&pane, self.density);
         pane.folder_context_trigger = self.install_context_menu(&pane);
         self.icons_root.append(&pane.shell);
@@ -1823,6 +1851,7 @@ impl ModeViews {
             depth,
             &snapshot.location.display_name(),
         );
+        install_pane_surface(&pane, &self.browser, &snapshot.location.display_name());
         pane.folder_context_trigger = self.install_context_menu(&pane);
         self.list_root.append(&pane.shell);
         apply_snapshot(&pane, &snapshot, &self.browser);
@@ -1838,13 +1867,87 @@ fn widget_has_focus(widget: &impl IsA<gtk::Widget>, focused: Option<&gtk::Widget
         })
 }
 
-fn pane_holds_keyboard_focus(pane: &Pane) -> bool {
+/// Only a revealed funnel counts: a 10xer footer filter leaves it closed and has its own
+/// Escape order. Away from native folders the filter narrows the listing in place, so its
+/// narrowed rows are the results.
+fn pane_filter_focus(pane: &Pane, focused: Option<&gtk::Widget>) -> Option<FilterFocus> {
+    if pane
+        .filter_entry
+        .as_ref()
+        .is_some_and(|entry| widget_has_focus(entry, focused))
+    {
+        return Some(FilterFocus::Entry);
+    }
+    let revealed = pane
+        .filter_button
+        .as_ref()
+        .is_some_and(gtk::ToggleButton::is_active);
+    let results = if pane.search.replaces_listing() {
+        pane.search.results_view().is_some() && pane.search.has_item_focus(focused)
+    } else {
+        !pane.filter_query.borrow().is_empty()
+            && pane
+                .item_sections()
+                .iter()
+                .any(|section| widget_has_focus(&section.view, focused))
+    };
+    (revealed && results).then_some(FilterFocus::Results)
+}
+
+/// Any part of the pane holds focus, its filter session included.
+fn pane_contains_focus(pane: &Pane) -> bool {
     let focused = pane.stack.root().and_then(|root| root.focus());
     widget_has_focus(&pane.stack, focused.as_ref())
         || pane
             .item_sections()
             .iter()
             .any(|section| widget_has_focus(&section.view, focused.as_ref()))
+}
+
+/// The listing itself holds focus: the pane surface or one of its item views, not the
+/// filter field or the results that replace the listing, 10xer's included. Loads and
+/// live changes refocus the listing only then.
+fn pane_holds_keyboard_focus(pane: &Pane) -> bool {
+    let focused = pane.stack.root().and_then(|root| root.focus());
+    let filter_session = pane
+        .filter_entry
+        .as_ref()
+        .is_some_and(|entry| widget_has_focus(entry, focused.as_ref()))
+        || pane.search.has_item_focus(focused.as_ref());
+    !filter_session && pane_contains_focus(pane)
+}
+
+fn install_tab_landing(view: &gtk::Widget, state: Option<Weak<super::browser::ViewState>>) {
+    let Some(state) = state else {
+        return;
+    };
+    let focus = gtk::EventControllerFocus::new();
+    focus.connect_enter(move |_| {
+        if let Some(state) = state.upgrade() {
+            state.land_tab_crossing();
+        }
+    });
+    view.add_controller(focus);
+}
+
+/// The page a List or Icons pane shows for an empty or unreadable directory.
+const STATUS_PAGE: &str = "status";
+
+fn install_pane_surface(pane: &Pane, browser: &Rc<Browser>, directory: &str) {
+    super::loading_skeleton::DirectorySurface::install(
+        &pane.stack,
+        &pane.status,
+        &pane.section.view,
+        pane.search.result_collection_view().as_ref(),
+        browser,
+        directory,
+    );
+}
+
+/// Focuses the pane's collection view, or the pane itself while it shows a status or
+/// loading page.
+fn focus_pane_surface(pane: &Pane) -> bool {
+    super::loading_skeleton::focus_surface_or(&pane.stack, &pane.focus_view())
 }
 
 #[derive(Clone)]
@@ -2209,16 +2312,17 @@ fn build_icons_pane(
             if let (Some(stack), Some(context)) =
                 (loading_stack.upgrade(), loading_context.upgrade())
             {
-                let was_loading = stack.visible_child_name().as_deref() == Some("loading");
-                if let Some(old) = stack.child_by_name("loading") {
+                let was_loading = stack.visible_child_name().as_deref()
+                    == Some(super::loading_skeleton::LOADING_PAGE);
+                if let Some(old) = stack.child_by_name(super::loading_skeleton::LOADING_PAGE) {
                     stack.remove(&old);
                 }
                 stack.add_named(
                     &icons_loading_skeleton(size, context.density.get()),
-                    Some("loading"),
+                    Some(super::loading_skeleton::LOADING_PAGE),
                 );
                 if was_loading {
-                    stack.set_visible_child_name("loading");
+                    stack.set_visible_child_name(super::loading_skeleton::LOADING_PAGE);
                 }
             }
             let Some(sections) = sections_for_size.upgrade() else {
@@ -2518,6 +2622,8 @@ fn build_icons_view(context: &Rc<IconsContext>, model: &impl IsA<gio::ListModel>
     view.set_vexpand(false);
     view.set_enable_rubberband(false);
     view.set_single_click_activate(false);
+    view.set_tab_behavior(gtk::ListTabBehavior::Item);
+    install_tab_landing(view.upcast_ref(), context.state.clone());
     configure_icons_view_density(&view, context.density.get());
     super::accessibility::describe_entry_container(
         &view,
@@ -2725,7 +2831,9 @@ fn ensure_icons_card_slot(card: &gtk::Box, thumbnail_size: i32) {
 fn configure_icons_density(pane: &Pane, density: BrowserDensity) {
     pane.search
         .set_icons_max_columns(density_icons_columns(density));
-    if let Some(loading) = pane.stack.child_by_name("loading")
+    if let Some(loading) = pane
+        .stack
+        .child_by_name(super::loading_skeleton::LOADING_PAGE)
         && let Some(scroll) = loading.first_child().and_downcast::<gtk::ScrolledWindow>()
         && let Some(icons) = scroll.child().and_downcast::<gtk::GridView>()
     {
@@ -3161,6 +3269,8 @@ fn build_list_pane(
     // GTK bundles single-click activation with hover selection, which collapses
     // multi-selection. Per-row gestures honor the configured click behavior instead.
     view.set_single_click_activate(false);
+    view.set_tab_behavior(gtk::ListTabBehavior::Item);
+    install_tab_landing(view.upcast_ref(), options.state.clone());
     if let Some(destination) = browser.location_at(depth) {
         install_mode_directory_drop_target(&view, destination, transfer_handler.clone());
     }
@@ -3487,14 +3597,15 @@ fn pane_base(
     let status = gtk::Label::new(Some(&crate::i18n::tr("This directory is empty")));
     status.add_css_class("status-message");
     status.set_wrap(true);
+    // Focusable only off the content page (see `DirectorySurface`); a group role keeps its name.
     let stack = gtk::Stack::builder()
         .hexpand(true)
         .vexpand(true)
-        .focusable(true)
+        .accessible_role(gtk::AccessibleRole::Group)
         .build();
-    stack.add_named(&content, Some("content"));
-    stack.add_named(loading, Some("loading"));
-    stack.add_named(&status, Some("status"));
+    stack.add_named(&content, Some(super::loading_skeleton::CONTENT_PAGE));
+    stack.add_named(loading, Some(super::loading_skeleton::LOADING_PAGE));
+    stack.add_named(&status, Some(STATUS_PAGE));
     shell.append(&stack);
 
     let model = gtk::StringList::new(&[]);
@@ -4460,7 +4571,10 @@ fn collection_keeps_cursor(view: &gtk::Widget) -> bool {
         return false;
     }
     focused.as_ref().is_none_or(|focused| {
-        focused == view || view.is_ancestor(focused) || focused.is_ancestor(view)
+        focused == view
+            || view.is_ancestor(focused)
+            || focused.is_ancestor(view)
+            || super::focus_navigation::focus_removed_from(view, focused)
     })
 }
 
@@ -4567,17 +4681,21 @@ fn reconnect_pane_model(pane: &Pane) {
 }
 
 fn show_count(pane: &Pane) {
-    let count = pane.model.n_items();
-    if let Some(entry) = &pane.filter_entry {
-        entry.set_placeholder_text(Some(&super::browser::filter_placeholder(count as usize)));
-    }
-    if count == 0 {
+    show_count_controls(pane);
+    if pane.model.n_items() == 0 {
         pane.status.remove_css_class("error");
         pane.status
             .set_label(&crate::i18n::tr("This directory is empty"));
-        pane.loading.show("status");
+        pane.loading.show(STATUS_PAGE);
     } else {
-        pane.loading.show("content");
+        pane.loading.show(super::loading_skeleton::CONTENT_PAGE);
+    }
+}
+
+fn show_count_controls(pane: &Pane) {
+    let count = pane.model.n_items();
+    if let Some(entry) = &pane.filter_entry {
+        entry.set_placeholder_text(Some(&super::browser::filter_placeholder(count as usize)));
     }
     if let Some(button) = &pane.empty_trash_button {
         button.set_sensitive(count > 0);
@@ -4587,7 +4705,15 @@ fn show_count(pane: &Pane) {
 fn apply_snapshot(pane: &Pane, snapshot: &BrowserColumnSnapshot, browser: &Browser) {
     replace_entries(pane, browser, snapshot.count);
     reconnect_pane_model(pane);
-    show_count(pane);
+    let restarts_loading =
+        snapshot.loading && (snapshot.count == 0 || !snapshot.location.is_camera_photo_root());
+    // A load still in progress is not an empty directory; showing that page first
+    // would hand the surface focus before the grace period decides.
+    if restarts_loading {
+        show_count_controls(pane);
+    } else {
+        show_count(pane);
+    }
     set_selections(pane, &snapshot.selected_positions);
     if let Some(&focused) = snapshot.selected_positions.last() {
         scroll_pane_to_source(pane, focused);
@@ -4595,7 +4721,7 @@ fn apply_snapshot(pane: &Pane, snapshot: &BrowserColumnSnapshot, browser: &Brows
     pane.truncated_hint.set_visible(snapshot.truncated);
     if snapshot.loading {
         pane.spinner.start();
-        if snapshot.count == 0 || !snapshot.location.is_camera_photo_root() {
+        if restarts_loading {
             pane.loading.start();
         }
     } else {
@@ -4606,7 +4732,7 @@ fn apply_snapshot(pane: &Pane, snapshot: &BrowserColumnSnapshot, browser: &Brows
                 message = message
             ));
             pane.status.add_css_class("error");
-            pane.loading.show("status");
+            pane.loading.show(STATUS_PAGE);
         }
     }
 }

@@ -71,6 +71,24 @@ impl TabWindow {
         state.install_actions(window);
         state.install_keys(window);
         super::super::install_modal_focus_trap(window);
+        let weak = Rc::downgrade(&state);
+        crate::ui::modal::set_modal_focus_fallback(
+            window.upcast_ref(),
+            Rc::new(move || {
+                let browser = weak.upgrade().and_then(|state| {
+                    let active = state.active.get();
+                    state
+                        .tabs
+                        .borrow()
+                        .iter()
+                        .find(|tab| tab.id == active)
+                        .map(|tab| tab.content.browser.clone())
+                });
+                if let Some(browser) = browser {
+                    browser.restore_listing_focus();
+                }
+            }),
+        );
         tenxer_splash::install(window, &overlay, preferences);
         let weak = Rc::downgrade(&state);
         crate::ui::close_guard::install(window, move |_| {
@@ -203,15 +221,14 @@ impl TabWindow {
         tab.content.activate_actions(&window);
         self.refresh_chrome();
         self.strip.select(id);
-        if let Some(focus) = tab
+        let saved = tab
             .focus
             .borrow()
             .as_ref()
             .and_then(glib::WeakRef::upgrade)
-            .filter(|widget| widget.is_mapped())
-        {
-            focus.grab_focus();
-        } else {
+            .filter(|widget| widget.is_mapped());
+        // Saved focus may be a pane surface that is no longer focusable.
+        if !saved.is_some_and(|focus| focus.grab_focus()) {
             tab.content.browser.browser().focus_active();
         }
     }

@@ -566,7 +566,11 @@ impl ViewState {
                             scroll_column_to(column, focused);
                         }
                         if *take_focus && self.mode_views.borrow().mode() == BrowserMode::Columns {
-                            column.list.grab_focus();
+                            // A cursor restore queued for the previous cursor must not pull
+                            // focus back from the newly selected entry.
+                            let generation = &column.cursor_restore_generation;
+                            generation.set(generation.get().wrapping_add(1));
+                            column.focus_surface();
                         }
                     }
                 }
@@ -598,9 +602,8 @@ impl ViewState {
                         && self.mode_views.borrow().mode() == BrowserMode::Columns
                         && self.browser.active_depth() == Some(*depth)
                         && !self.suppress_scroll_after_drop.get()
-                        && !column.list.grab_focus()
                     {
-                        column.presentation.stack.grab_focus();
+                        column.focus_surface();
                     }
                     if !editing
                         && self.mode_views.borrow().mode() == BrowserMode::Columns
@@ -882,12 +885,14 @@ impl ViewState {
                             &message,
                             Rc::new(move || {
                                 if let Some(state) = weak_state.upgrade() {
-                                    state.show_delete_confirmation(retryable_entries.clone());
+                                    state.show_trash_unavailable_confirmation(
+                                        retryable_entries.clone(),
+                                    );
                                 }
                             }),
                         );
                     } else {
-                        state.show_delete_confirmation(retryable_entries);
+                        state.show_trash_unavailable_confirmation(retryable_entries);
                     }
                 });
             }

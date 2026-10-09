@@ -481,6 +481,8 @@ pub(super) fn is_browser_navigation_key(
             | gtk::gdk::Key::Right
             | gtk::gdk::Key::Home
             | gtk::gdk::Key::End
+            | gtk::gdk::Key::KP_Home
+            | gtk::gdk::Key::KP_End
             | gtk::gdk::Key::Page_Up
             | gtk::gdk::Key::Page_Down
             | gtk::gdk::Key::KP_Page_Up
@@ -497,6 +499,14 @@ fn page_direction(key: gtk::gdk::Key) -> Option<i32> {
     match key {
         gtk::gdk::Key::Page_Up | gtk::gdk::Key::KP_Page_Up => Some(-1),
         gtk::gdk::Key::Page_Down | gtk::gdk::Key::KP_Page_Down => Some(1),
+        _ => None,
+    }
+}
+
+fn home_end_direction(key: gtk::gdk::Key) -> Option<i32> {
+    match key {
+        gtk::gdk::Key::Home | gtk::gdk::Key::KP_Home => Some(-1),
+        gtk::gdk::Key::End | gtk::gdk::Key::KP_End => Some(1),
         _ => None,
     }
 }
@@ -834,8 +844,12 @@ pub(super) fn build_appearance_menu(
             if let Some(popover) = popover_weak.upgrade() {
                 popover.popdown();
             }
-            let browser = view.browser();
-            glib::idle_add_local_once(move || browser.focus_active());
+            let view = view.downgrade();
+            glib::idle_add_local_once(move || {
+                if let Some(view) = view.upgrade() {
+                    view.focus_switched_view();
+                }
+            });
         });
     }
     {

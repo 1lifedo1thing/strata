@@ -282,6 +282,12 @@ pub(super) struct ColumnHits {
 }
 
 impl ColumnView {
+    /// Focuses the list, or the column surface while it shows an empty, error or
+    /// loading page.
+    pub(super) fn focus_surface(&self) -> bool {
+        crate::ui::loading_skeleton::focus_surface_or(&self.presentation.stack, &self.list)
+    }
+
     pub(super) fn refresh_name_highlights(&self, find: Option<&str>) {
         let searching = self.recursive_search_active.get();
         let results = self.search_results.borrow();
@@ -480,11 +486,15 @@ pub(super) fn restore_column_cursor(column: &ColumnView, position: u32) {
             }
             let focused = list.root().and_then(|root| root.focus());
             // `is_ancestor` is true when the receiver sits inside the argument.
-            // Restore while focus is the list or one of its rows, and also while
-            // a parent of the list still holds focus. An inline name editor also
-            // sits inside a row and must keep the focus it took after this queued.
+            // Restore while focus is the list or one of its rows, while a parent of
+            // the list still holds focus, and while focus is on a row the update
+            // removed. An inline name editor also sits inside a row and must keep the
+            // focus it took after this queued.
             if !focused.as_ref().is_some_and(|focused| {
-                (focused == list || focused.is_ancestor(list) || list.is_ancestor(focused))
+                (focused == list
+                    || focused.is_ancestor(list)
+                    || list.is_ancestor(focused)
+                    || crate::ui::focus_navigation::focus_removed_from(list.upcast_ref(), focused))
                     && !crate::ui::focus_navigation::editable(focused)
             }) {
                 return glib::ControlFlow::Break;
@@ -806,6 +816,23 @@ impl ViewState {
         }
     }
 
+    /// Reapplies the directory selection to rows that return unselected when a filter ends.
+    fn resync_column_selection(&self, depth: usize) {
+        let Ok(columns) = self.columns.try_borrow() else {
+            return;
+        };
+        let Some(column) = columns.get(depth) else {
+            return;
+        };
+        let positions: Vec<_> = self
+            .browser
+            .selected_positions(depth)
+            .into_iter()
+            .filter_map(|position| column.map.view_position(position))
+            .collect();
+        set_column_selections(column, &positions);
+    }
+
     pub(super) fn focus_rebuilt_active_column(&self) {
         let Some(depth) = self.browser.active_depth() else {
             return;
@@ -825,12 +852,22 @@ impl ViewState {
         if let Some(position) = position {
             scroll_column_to(column, position);
         }
-        column.list.grab_focus();
-        let list = column.list.downgrade();
+        column.focus_surface();
+        let column = column.clone();
         glib::idle_add_local_once(move || {
-            if let Some(list) = list.upgrade() {
-                list.grab_focus();
+            // A Ctrl+F, popover or dialog opened since the rebuild keeps focus.
+            let root = column.list.root();
+            let focused = root.as_ref().and_then(|root| root.focus());
+            if focused.is_some_and(|focused| {
+                crate::ui::focus_navigation::editable(&focused)
+                    || crate::ui::focus_navigation::in_popover(&focused)
+            }) || root
+                .and_downcast::<gtk::Window>()
+                .is_some_and(|window| crate::ui::window::visible_modal_layer(&window).is_some())
+            {
+                return;
             }
+            column.focus_surface();
         });
     }
 
@@ -1138,6 +1175,7 @@ impl ViewState {
                         &model_for_search,
                     );
                     if let Some(state) = weak_state_for_search.upgrade() {
+                        state.resync_column_selection(depth_for_search);
                         state.refresh_name_highlights();
                         state.notify_filter_results_changed();
                     }
@@ -1255,6 +1293,7 @@ impl ViewState {
         list.add_css_class("file-list");
         list.set_enable_rubberband(false);
         list.set_single_click_activate(false);
+        list.set_tab_behavior(gtk::ListTabBehavior::Item);
         list.set_vexpand(true);
         crate::ui::accessibility::describe_entry_container(&list, &location.display_name());
 
@@ -1454,7 +1493,11 @@ impl ViewState {
                 browser.retry_column(depth);
             }
         });
-        let presentation = LoadPresentation::new(&scroll, Some(retry));
+        let presentation = LoadPresentation::new(&scroll, Some(retry)).with_focus_fallback(
+            &location.display_name(),
+            &list,
+            &self.browser,
+        );
         let rows_for_marquee = bound_rows.clone();
         let weak_for_clear = Rc::downgrade(self);
         let returning_to_column = Rc::new(Cell::new(false));
@@ -1517,11 +1560,12 @@ impl ViewState {
             marquee.group_background_click(click);
         }
 
-        presentation.stack.set_focusable(true);
         let focus = gtk::EventControllerFocus::new();
         let weak = Rc::downgrade(self);
         focus.connect_enter(move |_| {
+            // The strip is one Tab stop: Tab from outside lands on the active column.
             if let Some(state) = weak.upgrade()
+                && !state.land_tab_crossing()
                 && state
                     .context_menu_column
                     .get()
