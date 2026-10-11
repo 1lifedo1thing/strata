@@ -2264,6 +2264,12 @@ impl Browser {
         self.state.borrow().selected_positions(depth)
     }
 
+    pub fn active_selection_contains(&self, depth: usize, position: usize) -> bool {
+        self.state
+            .borrow()
+            .active_selection_contains(depth, position)
+    }
+
     pub fn selected_entries(&self) -> Vec<FileEntry> {
         self.state.borrow().selected_entries()
     }
