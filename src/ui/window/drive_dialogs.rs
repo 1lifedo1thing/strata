@@ -15,7 +15,9 @@ use crate::{
             keep_words_whole, modal_layout, progress_summary, properties_action,
         },
         missing_tools::{MissingTool, show_missing_tools},
-        modal::{ModalHost, dismiss_modal_layer, modal_layer, remember_modal_focus},
+        modal::{
+            ModalHost, close_on_escape, dismiss_modal_layer, modal_layer, remember_modal_focus,
+        },
     },
 };
 
@@ -320,17 +322,7 @@ fn wire_modal_close(shell: &ModalShell) {
     shell.layout.cancel.connect_clicked(move |_| cancelled());
     let closed = close.clone();
     shell.layout.close.connect_clicked(move |_| closed());
-    let escaped = close.clone();
-    let escape = gtk::EventControllerKey::new();
-    escape.connect_key_pressed(move |_, key, _, _| {
-        if key == gtk::gdk::Key::Escape {
-            escaped();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
-    shell.layer.add_controller(escape);
+    close_on_escape(&shell.layer, move || close());
     shell.layout.confirm.grab_focus();
 }
 
@@ -925,16 +917,6 @@ fn wire_modal_close_except_confirm(shell: &ModalShell) {
     shell.layout.cancel.connect_clicked(move |_| cancelled());
     let closed = close.clone();
     shell.layout.close.connect_clicked(move |_| closed());
-    let escaped = close.clone();
-    let escape = gtk::EventControllerKey::new();
-    escape.connect_key_pressed(move |_, key, _, _| {
-        if key == gtk::gdk::Key::Escape {
-            escaped();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
-    shell.layer.add_controller(escape);
+    close_on_escape(&shell.layer, move || close());
     shell.layout.confirm.grab_focus();
 }

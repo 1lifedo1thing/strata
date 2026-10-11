@@ -11,6 +11,10 @@ use std::{
 
 use gtk::{gdk, glib, prelude::*};
 
+use super::keys::{
+    self,
+    bindings::{DOWN, ENTER_ANY_SHIFT, ESCAPE_ANY, OPEN_CONTAINING_FOLDER, UP},
+};
 use crate::services::{
     NavigationHistory, SearchCoverage, SearchEvent, SearchHandle, SearchItem,
     index_trees_with_exclusions,
@@ -145,7 +149,10 @@ impl SearchDialog {
             label.set_ellipsize(gtk::pango::EllipsizeMode::End);
             label
         };
-        let navigation = hint_label(&crate::i18n::tr("↑↓  navigate"));
+        let navigation = hint_label(&super::shortcut_reference::with_keys(
+            "%{keys}  navigate",
+            keys::Keys::Any(&[UP, DOWN]),
+        ));
         let open = gtk::Box::new(gtk::Orientation::Horizontal, 5);
         open.set_valign(gtk::Align::Center);
         open.append(&crate::assets::primary_icon(
@@ -163,8 +170,9 @@ impl SearchDialog {
             crate::assets::icons::FOLDER_OPEN,
             13,
         ));
-        reveal_hint.append(&hint_label(&crate::i18n::tr(
-            "Alt+Enter  open containing folder",
+        reveal_hint.append(&hint_label(&super::shortcut_reference::with_keys(
+            "%{keys}  open containing folder",
+            keys::Keys::One(OPEN_CONTAINING_FOLDER),
         )));
         reveal_hint.add_css_class("search-hint");
         footer.append(&reveal_hint);
@@ -227,19 +235,16 @@ impl SearchDialog {
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let keyed = Rc::downgrade(&state);
-        keys.connect_key_pressed(move |_, key, _, modifiers| {
+        keys::on_press(&keys, move |_, press| {
             let Some(state) = keyed.upgrade() else {
                 return glib::Propagation::Proceed;
             };
             record_interaction(&state);
-            if key == gdk::Key::Escape {
+            if press.is(ESCAPE_ANY) {
                 hide(&state);
                 return glib::Propagation::Stop;
             }
-            if matches!(key, gdk::Key::Return | gdk::Key::KP_Enter)
-                && modifiers & gtk::accelerator_get_default_mod_mask()
-                    == gdk::ModifierType::ALT_MASK
-            {
+            if press.is(OPEN_CONTAINING_FOLDER) {
                 if let Some(item) = state.list.selected_row().and_then(|row| {
                     state
                         .visible_results
@@ -251,20 +256,11 @@ impl SearchDialog {
                 }
                 return glib::Propagation::Stop;
             }
-            if modifiers.intersects(
-                gdk::ModifierType::CONTROL_MASK
-                    | gdk::ModifierType::ALT_MASK
-                    | gdk::ModifierType::SUPER_MASK,
-            ) {
-                return glib::Propagation::Proceed;
-            }
-            if matches!(key, gdk::Key::Down | gdk::Key::Up)
-                && !modifiers.contains(gdk::ModifierType::SHIFT_MASK)
-            {
-                move_selection(&state, if key == gdk::Key::Down { 1 } else { -1 });
+            if press.is_any(&[DOWN, UP]) {
+                move_selection(&state, if press.is(DOWN) { 1 } else { -1 });
                 return glib::Propagation::Stop;
             }
-            if matches!(key, gdk::Key::Return | gdk::Key::KP_Enter) && activate_selected(&state) {
+            if press.is(ENTER_ANY_SHIFT) && activate_selected(&state) {
                 return glib::Propagation::Stop;
             }
             glib::Propagation::Proceed

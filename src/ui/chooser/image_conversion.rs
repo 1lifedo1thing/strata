@@ -235,17 +235,8 @@ impl ChooserState {
                 |state, path| state.finish_remote(path),
             );
         });
-        let escape = gtk::EventControllerKey::new();
         let cancel = layout.cancel.clone();
-        escape.connect_key_pressed(move |_, key, _, _| {
-            if key == gtk::gdk::Key::Escape {
-                cancel.emit_clicked();
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
-            }
-        });
-        layer.add_controller(escape);
+        close_on_escape(&layer, move || cancel.emit_clicked());
         focus_button(&layout.cancel);
     }
 }

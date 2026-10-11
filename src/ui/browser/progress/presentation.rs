@@ -1,22 +1,14 @@
 // SPDX-License-Identifier: MIT
 
 use super::{FileProgressState, FileProgressView};
+use crate::ui::modal::close_on_escape;
 use crate::ui::progress_dock::CompactProgress;
-use gtk::{glib, prelude::*};
+use gtk::prelude::*;
 use std::rc::Rc;
 
 pub(super) fn install_progress_keys(layer: &gtk::Box, action: &Rc<dyn Fn()>) {
     let action = action.clone();
-    let escape = gtk::EventControllerKey::new();
-    escape.connect_key_pressed(move |_, key, _, _| {
-        if key == gtk::gdk::Key::Escape {
-            action();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
-    layer.add_controller(escape);
+    close_on_escape(layer, move || action());
 }
 
 impl FileProgressState {

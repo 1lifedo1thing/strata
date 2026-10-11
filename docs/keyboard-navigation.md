@@ -8,6 +8,15 @@ Columns have three independent signals:
 
 The destination column has an accent rule across its header, including when the directory is empty. Columns no longer reserve a separate bottom margin for the horizontal scrollbar.
 
+## Keyboard layouts
+
+Every shortcut on this page works on any keyboard layout. Letters follow the
+key's label, or the Latin letter the key carries on Russian and other non-Latin
+layouts, so **Ctrl+C** is the key that types **с** in Russian. Digits count by
+their position on the top row, so **Ctrl+1** works on AZERTY without Shift, and
+Caps Lock never changes a shortcut. See [keyboard shortcuts](keyboard-shortcuts.md)
+for the full rules.
+
 ## Browser tabs
 
 In regular and 10xer modes, **Ctrl+T** opens a tab at the active location,
@@ -262,9 +271,9 @@ portal file chooser it lists only the keys that request allows.
 Context-menu hints use `x`, `y`, `p`, `d` / `D`, `r`, `i`, and `M` / `C` / `R`
 (Move to, Copy to, Restore) only when those commands perform the action. `i` toggles a file's preview without taking focus, or is the next column or folder peek for a directory.
 Until those verbs run, the menu keeps the shortcuts that still work and hides
-the unbound defaults (`Y` for copy path, `Space` for preview, and `Ctrl+R` for
+the unbound defaults (`y` for copy path, `Space` for preview, and `Ctrl+R` for
 rename). Planned commands are not shown as working. In the default map, the
-`Y` (copy path) and `P` (pin) hints show only while **Type to search** is off,
+`y` (copy path) and `p` (pin) hints show only while **Type to search** is off,
 because type-to-search claims those letters otherwise.
 
 While a pane shows its search-results page (including filtered results), the footer

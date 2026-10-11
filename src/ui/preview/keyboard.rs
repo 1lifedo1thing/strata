@@ -7,7 +7,18 @@
 //! unchanged.
 
 use super::*;
-use crate::ui::browser::{BrowserView, WeakBrowserView};
+use crate::ui::{
+    browser::{BrowserView, WeakBrowserView},
+    keys::{
+        Binding,
+        bindings::{
+            DOWN, FIRST_ITEM, LAST_ITEM, LEFT, MEDIA_SEEK_BACK_PAGE, MEDIA_SEEK_FORWARD_PAGE,
+            MEDIA_SEEK_START, MEDIA_VOLUME_STEP_DOWN, MEDIA_VOLUME_STEP_UP,
+            MEDIA_VOLUME_STEP_UP_EQUAL, PAGE_DOWN, PAGE_UP, RIGHT, SPACE, TENXER_LAST_ITEM,
+            TENXER_MEDIA_MUTE, TENXER_MEDIA_NEXT, TENXER_MEDIA_PREVIOUS, UP,
+        },
+    },
+};
 
 const OWNER_CLASS: &str = "preview-keyboard-owner";
 const MAX_CLAIM_FRAMES: u32 = 30;
@@ -31,32 +42,32 @@ pub(in crate::ui) enum DocumentScroll {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum MediaSeek {
+pub(in crate::ui) enum ArchiveMove {
+    Previous,
+    Next,
+    Parent,
+    Open,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::ui) enum MediaCommand {
+    PlayPause,
+    Seek(MediaSeek),
+    VolumeUp,
+    VolumeDown,
+    Mute,
+    Previous,
+    Next,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::ui) enum MediaSeek {
     By(i64),
     Start,
     End,
 }
 
 impl MediaSeek {
-    /// `shifted` turns **←** / **→** into page steps. **G** and **0** accept
-    /// Shift, which some layouts need to type them.
-    pub(super) fn for_key(key: gtk::gdk::Key, shifted: bool) -> Option<Self> {
-        use gtk::gdk::Key;
-        let (step, page) = (MEDIA_SEEK_STEP_US, MEDIA_SEEK_PAGE_US);
-        Some(match key {
-            Key::Left | Key::KP_Left => Self::By(if shifted { -page } else { -step }),
-            Key::Right | Key::KP_Right => Self::By(if shifted { page } else { step }),
-            Key::G => Self::End,
-            Key::_0 => Self::Start,
-            _ if shifted => return None,
-            Key::Page_Up | Key::KP_Page_Up => Self::By(page),
-            Key::Page_Down | Key::KP_Page_Down => Self::By(-page),
-            Key::Home | Key::KP_Home => Self::Start,
-            Key::End | Key::KP_End => Self::End,
-            _ => return None,
-        })
-    }
-
     pub(super) fn target(self, timestamp: i64, duration: i64) -> i64 {
         let last = media_last_frame(duration);
         match self {
@@ -67,42 +78,68 @@ impl MediaSeek {
     }
 }
 
-/// **+** accepts Shift, which most layouts need to type it.
-pub(super) fn media_volume_delta(key: gtk::gdk::Key, shifted: bool) -> Option<f64> {
-    use gtk::gdk::Key;
-    match key {
-        Key::plus => Some(MEDIA_VOLUME_STEP),
-        _ if shifted => None,
-        Key::equal | Key::KP_Add => Some(MEDIA_VOLUME_STEP),
-        Key::minus | Key::KP_Subtract => Some(-MEDIA_VOLUME_STEP),
-        _ => None,
+impl MediaCommand {
+    pub(super) fn volume_delta(self) -> Option<f64> {
+        match self {
+            Self::VolumeUp => Some(MEDIA_VOLUME_STEP),
+            Self::VolumeDown => Some(-MEDIA_VOLUME_STEP),
+            _ => None,
+        }
     }
 }
 
-/// Keys that also work with **Ctrl+Alt** from outside the preview.
-pub(super) fn has_media_shortcut(key: gtk::gdk::Key) -> bool {
-    use gtk::gdk::Key;
-    matches!(
-        key,
-        Key::space
-            | Key::Left
-            | Key::Right
-            | Key::Up
-            | Key::Down
-            | Key::m
-            | Key::M
-            | Key::less
-            | Key::greater
-    )
+const SEEK_AND_VOLUME: [(Binding, MediaCommand); 13] = [
+    (LEFT, MediaCommand::Seek(MediaSeek::By(-MEDIA_SEEK_STEP_US))),
+    (RIGHT, MediaCommand::Seek(MediaSeek::By(MEDIA_SEEK_STEP_US))),
+    (
+        MEDIA_SEEK_BACK_PAGE,
+        MediaCommand::Seek(MediaSeek::By(-MEDIA_SEEK_PAGE_US)),
+    ),
+    (
+        MEDIA_SEEK_FORWARD_PAGE,
+        MediaCommand::Seek(MediaSeek::By(MEDIA_SEEK_PAGE_US)),
+    ),
+    (
+        PAGE_DOWN,
+        MediaCommand::Seek(MediaSeek::By(-MEDIA_SEEK_PAGE_US)),
+    ),
+    (
+        PAGE_UP,
+        MediaCommand::Seek(MediaSeek::By(MEDIA_SEEK_PAGE_US)),
+    ),
+    (MEDIA_SEEK_START, MediaCommand::Seek(MediaSeek::Start)),
+    (FIRST_ITEM, MediaCommand::Seek(MediaSeek::Start)),
+    (TENXER_LAST_ITEM, MediaCommand::Seek(MediaSeek::End)),
+    (LAST_ITEM, MediaCommand::Seek(MediaSeek::End)),
+    (MEDIA_VOLUME_STEP_UP, MediaCommand::VolumeUp),
+    (MEDIA_VOLUME_STEP_UP_EQUAL, MediaCommand::VolumeUp),
+    (MEDIA_VOLUME_STEP_DOWN, MediaCommand::VolumeDown),
+];
+
+const PLAYBACK: [(Binding, MediaCommand); 6] = [
+    (SPACE, MediaCommand::PlayPause),
+    (UP, MediaCommand::VolumeUp),
+    (DOWN, MediaCommand::VolumeDown),
+    (TENXER_MEDIA_MUTE, MediaCommand::Mute),
+    (TENXER_MEDIA_PREVIOUS, MediaCommand::Previous),
+    (TENXER_MEDIA_NEXT, MediaCommand::Next),
+];
+
+pub(super) fn seek_or_volume(press: &KeyPress) -> Option<MediaCommand> {
+    command_for(&SEEK_AND_VOLUME, press)
 }
 
-/// Keys the 10xer Media surface claims even when the stream cannot act on them.
-/// `<` and `>` need Shift on most layouts.
-pub(in crate::ui) fn is_media_key(key: gtk::gdk::Key, shifted: bool) -> bool {
-    use gtk::gdk::Key;
-    (has_media_shortcut(key) && (!shifted || matches!(key, Key::less | Key::greater)))
-        || MediaSeek::for_key(key, shifted).is_some()
-        || media_volume_delta(key, shifted).is_some()
+/// Keys a keyboard-owned media preview claims, even when the stream cannot
+/// act on them.
+pub(in crate::ui) fn media_key_command(press: &KeyPress) -> Option<MediaCommand> {
+    command_for(&PLAYBACK, press).or_else(|| seek_or_volume(press))
+}
+
+fn command_for(commands: &[(Binding, MediaCommand)], press: &KeyPress) -> Option<MediaCommand> {
+    commands
+        .iter()
+        .find(|(binding, _)| press.is(*binding))
+        .map(|(_, command)| *command)
 }
 
 /// Steps the shared preview volume; reaching zero mutes and keeps the volume
@@ -153,8 +190,8 @@ impl PreviewDrawer {
 
     /// Plain media keys for a keyboard-owned media preview, plus `<` / `>` from
     /// the 10xer listing while an audio preview is open.
-    pub(in crate::ui) fn media_key(&self, key: gtk::gdk::Key, shifted: bool) -> bool {
-        self.has_video() && self.state.media_command(key, shifted)
+    pub(in crate::ui) fn media_key(&self, command: MediaCommand) -> bool {
+        self.has_video() && self.state.media_command(command)
     }
 
     pub(in crate::ui) fn archive_at_root(&self) -> bool {
@@ -373,7 +410,7 @@ impl PreviewState {
         if self.archive_list_has_focus(Some(focused)) {
             return PreviewSurface::Archive;
         }
-        if accepts_typing(focused) {
+        if crate::ui::focus_navigation::accepts_typing(focused) {
             return PreviewSurface::Text;
         }
         let media_view = self.has_media_view()
@@ -448,21 +485,5 @@ impl PreviewState {
         };
         adjustment.set_value(target.clamp(lower, limit));
         true
-    }
-}
-
-/// Read-only source text is a document, not a text field.
-fn accepts_typing(focused: &gtk::Widget) -> bool {
-    let view = focused
-        .downcast_ref::<gtk::TextView>()
-        .cloned()
-        .or_else(|| {
-            focused
-                .ancestor(gtk::TextView::static_type())
-                .and_downcast::<gtk::TextView>()
-        });
-    match view {
-        Some(view) => view.is_editable(),
-        None => crate::ui::focus_navigation::editable(focused),
     }
 }

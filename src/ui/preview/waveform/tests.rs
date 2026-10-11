@@ -37,7 +37,7 @@ fn keys_step_and_jump_the_playback_position() {
             const TICK: i64 = 1_000_000 / crate::media::FPS as i64;
             // The last frame: seeking to the duration itself would end the stream.
             const LAST: i64 = 59_966_666;
-            use gdk::{Key, ModifierType as Mods};
+            use gtk::gdk::{Key, ModifierType as Mods};
             crate::ui::media::use_test_streams(true);
             let media = crate::ui::media::DecodedMedia::new(crate::services::SandboxedMedia {
                 path: "/clip.mp4".into(),
@@ -79,8 +79,8 @@ fn keys_step_and_jump_the_playback_position() {
                 (20_000_000, Key::End, Mods::empty(), Some(LAST)),
                 (20_000_000, Key::KP_End, Mods::empty(), Some(LAST)),
                 (20_000_000, Key::G, Mods::SHIFT_MASK, Some(LAST)),
-                // Caps Lock types G without Shift.
-                (20_000_000, Key::G, Mods::LOCK_MASK, Some(LAST)),
+                // Caps Lock never changes a shortcut: this is g, not G.
+                (20_000_000, Key::G, Mods::LOCK_MASK, None),
                 // Modified paging and jump keys stay free for other bindings.
                 (20_000_000, Key::Page_Up, Mods::SHIFT_MASK, None),
                 (

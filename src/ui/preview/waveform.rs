@@ -5,16 +5,19 @@ use std::{
     rc::Rc,
 };
 
-use gtk::{gdk, glib, graphene, prelude::*, subclass::prelude::*};
+use gtk::{glib, graphene, prelude::*, subclass::prelude::*};
 
 use crate::{
     media::peaks::{BUCKETS, rms},
-    ui::preview::{
-        audio::{
-            clock,
-            palette::{follow_theme, palette, with_alpha},
+    ui::{
+        keys,
+        preview::{
+            audio::{
+                clock,
+                palette::{follow_theme, palette, with_alpha},
+            },
+            keyboard::{MediaCommand, MediaSeek, seek_or_volume, step_preview_volume},
         },
-        keyboard::{MediaSeek, media_volume_delta, step_preview_volume},
     },
 };
 
@@ -347,27 +350,27 @@ impl Waveform {
         self.add_controller(motion);
 
         let keys = gtk::EventControllerKey::new();
-        keys.connect_key_pressed(glib::clone!(
-            #[weak(rename_to = waveform)]
-            self,
-            #[upgrade_or]
-            glib::Propagation::Proceed,
-            move |_, key, _, modifiers| {
-                let modifiers = modifiers & gtk::accelerator_get_default_mod_mask();
-                let shifted = modifiers == gdk::ModifierType::SHIFT_MASK;
-                if !(modifiers.is_empty() || shifted) {
-                    return glib::Propagation::Proceed;
+        keys::on_press(
+            &keys,
+            glib::clone!(
+                #[weak(rename_to = waveform)]
+                self,
+                #[upgrade_or]
+                glib::Propagation::Proceed,
+                move |_, press| {
+                    match seek_or_volume(press) {
+                        Some(MediaCommand::Seek(seek)) => waveform.seek_by_key(seek),
+                        Some(command) => {
+                            if let Some(delta) = command.volume_delta() {
+                                step_preview_volume(delta);
+                            }
+                        }
+                        None => return glib::Propagation::Proceed,
+                    }
+                    glib::Propagation::Stop
                 }
-                if let Some(seek) = MediaSeek::for_key(key, shifted) {
-                    waveform.seek_by_key(seek);
-                } else if let Some(delta) = media_volume_delta(key, shifted) {
-                    step_preview_volume(delta);
-                } else {
-                    return glib::Propagation::Proceed;
-                }
-                glib::Propagation::Stop
-            }
-        ));
+            ),
+        );
         self.add_controller(keys);
     }
 

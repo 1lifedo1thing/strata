@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use gtk::{gdk, gio, glib, prelude::*, subclass::prelude::*};
+use gtk::{gio, glib, prelude::*, subclass::prelude::*};
 
 use crate::{
     assets::icons,
@@ -36,8 +36,13 @@ use general::general_page;
 use theme::theme_page;
 
 use super::{
-    blur::BlurBin, browser::dismiss_modal_layer, controls::modal_layout,
-    modal::modal_layer_with_backdrop, preferences::PreferenceManager, terminal,
+    blur::BlurBin,
+    browser::dismiss_modal_layer,
+    controls::modal_layout,
+    keys::{self, bindings::SELECT_ALL},
+    modal::{close_on_escape, modal_layer_with_backdrop},
+    preferences::PreferenceManager,
+    terminal,
 };
 
 type AvailableUpdate = (ReleaseMetadata, InstallRequest, UpdateMethod);
@@ -956,15 +961,7 @@ pub fn build_layer(
     let close_hide = close_settings.clone();
     close.connect_clicked(move |_| close_hide());
     let escape_hide = close_settings.clone();
-    let keys = gtk::EventControllerKey::new();
-    keys.connect_key_pressed(move |_, key, _, _| {
-        if key != gdk::Key::Escape {
-            return gtk::glib::Propagation::Proceed;
-        }
-        escape_hide();
-        gtk::glib::Propagation::Stop
-    });
-    layer.add_controller(keys);
+    close_on_escape(&layer, move || escape_hide());
 
     let click_layer = layer.clone();
     let click_dialog = responsive_panel.clone();
@@ -2541,20 +2538,10 @@ fn build_update_dialog(
         let layer = layer.clone();
         button.connect_clicked(move |_| close_dialog(&layer));
     }
-    let escape = gtk::EventControllerKey::new();
-    escape.connect_key_pressed({
-        let close_dialog = close_dialog.clone();
+    let escape = close_on_escape(&layer, {
         let layer = layer.clone();
-        move |_, key, _, _| {
-            if key == gtk::gdk::Key::Escape {
-                close_dialog(&layer);
-                glib::Propagation::Stop
-            } else {
-                glib::Propagation::Proceed
-            }
-        }
+        move || close_dialog(&layer)
     });
-    layer.add_controller(escape.clone());
 
     // Set when the offer this dialog was opened with is no longer eligible on
     // the current channel, which turns the action button into a plain Close.
@@ -3102,6 +3089,27 @@ fn page_content() -> gtk::Box {
     content
 }
 
+/// Translates Settings copy, rendering the shortcuts it names.
+fn translated(message: &str) -> String {
+    translated_in(&rust_i18n::locale(), message)
+}
+
+fn translated_in(locale: &str, message: &str) -> String {
+    use super::keys::{
+        Keys::One,
+        bindings::{REFERENCE, SIDEBAR_FOCUS, TENXER_MODE},
+        label_in,
+    };
+    rust_i18n::t!(
+        message,
+        locale = locale,
+        reference_keys = label_in(locale, &One(REFERENCE)),
+        sidebar_focus_keys = label_in(locale, &One(SIDEBAR_FOCUS)),
+        tenxer_mode_keys = label_in(locale, &One(TENXER_MODE))
+    )
+    .into_owned()
+}
+
 fn settings_option(title: &str, description: &str, active: bool) -> (gtk::Box, gtk::Switch) {
     let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
     search::tag(&row, title);
@@ -3109,12 +3117,12 @@ fn settings_option(title: &str, description: &str, active: bool) -> (gtk::Box, g
     let copy = gtk::Box::new(gtk::Orientation::Vertical, 2);
     copy.set_hexpand(true);
     copy.set_valign(gtk::Align::Center);
-    let title_label = gtk::Label::new(Some(&crate::i18n::tr(title)));
+    let title_label = gtk::Label::new(Some(&translated(title)));
     title_label.set_xalign(0.0);
     title_label.set_wrap(true);
     title_label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
     title_label.add_css_class("settings-option-title");
-    let description_label = gtk::Label::new(Some(&crate::i18n::tr(description)));
+    let description_label = gtk::Label::new(Some(&translated(description)));
     description_label.set_xalign(0.0);
     description_label.set_wrap(true);
     description_label.add_css_class("settings-option-description");
@@ -3127,16 +3135,12 @@ fn settings_option(title: &str, description: &str, active: bool) -> (gtk::Box, g
         .valign(gtk::Align::Center)
         .build();
     toggle.update_property(&[
-        gtk::accessible::Property::Label(&crate::i18n::tr(title)),
-        gtk::accessible::Property::Description(&crate::i18n::tr(description)),
+        gtk::accessible::Property::Label(&translated(title)),
+        gtk::accessible::Property::Description(&translated(description)),
     ]);
     row.append(&copy);
     row.append(&toggle);
     (row, toggle)
-}
-
-fn selects_all_in_settings_search(key: gdk::Key, modifiers: gdk::ModifierType) -> bool {
-    modifiers.contains(gdk::ModifierType::CONTROL_MASK) && matches!(key, gdk::Key::a | gdk::Key::A)
 }
 
 fn search_field(placeholder: &str) -> (gtk::Overlay, gtk::Entry, gtk::Button) {
@@ -3148,8 +3152,8 @@ fn search_field(placeholder: &str) -> (gtk::Overlay, gtk::Entry, gtk::Button) {
     let search_keys = gtk::EventControllerKey::new();
     search_keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     let selected_search = theme_search.downgrade();
-    search_keys.connect_key_pressed(move |_, key, _, modifiers| {
-        if !selects_all_in_settings_search(key, modifiers) {
+    keys::on_press(&search_keys, move |_, press| {
+        if !press.is(SELECT_ALL) {
             return glib::Propagation::Proceed;
         }
         let Some(search) = selected_search.upgrade() else {

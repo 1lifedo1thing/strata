@@ -120,6 +120,26 @@ impl Chooser {
             .unwrap_or_default()
     }
 
+    fn chord_panel(&self) -> Vec<String> {
+        let mut labels = Vec::new();
+        let panel = widget_with_class(self.state.window.upcast_ref(), "shortcut-chord-popover");
+        let mut pending: Vec<_> = panel
+            .filter(|panel| panel.is_visible())
+            .into_iter()
+            .collect();
+        while let Some(widget) = pending.pop() {
+            if let Some(label) = widget.downcast_ref::<gtk::Label>() {
+                labels.push(label.text().to_string());
+            }
+            let mut child = widget.first_child();
+            while let Some(current) = child {
+                child = current.next_sibling();
+                pending.push(current);
+            }
+        }
+        labels
+    }
+
     fn prompt(&self) -> gtk::Entry {
         widget_with_class(self.state.window.upcast_ref(), "shortcut-footer-prompt")
             .and_downcast::<gtk::Entry>()
@@ -377,6 +397,15 @@ fn chooser_refuses_commands_its_request_does_not_allow() {
             assert_eq!(chooser.cursor_name().as_deref(), Some("a.txt"));
 
             chooser.press(Key::g);
+            wait_until(|| chooser.chord_panel().iter().any(|label| label == "Recent"));
+            let panel = chooser.chord_panel();
+            assert!(panel.iter().any(|label| label == "Pins"), "{panel:?}");
+            for refused in ["Trash", "Network", "Pin / unpin folder"] {
+                assert!(
+                    !panel.iter().any(|label| label == refused),
+                    "the g panel offers {refused}: {panel:?}"
+                );
+            }
             chooser.press(Key::t);
             assert_eq!(chooser.feedback(), "Only local folders can be opened here");
             chooser.press(Key::g);
@@ -634,6 +663,17 @@ fn save_name_and_location_do_not_dispatch_listing_shortcuts() {
                     assert!(!chooser.state.view.filter_has_focus());
                     assert!(chooser.open_request());
                 }
+                // Ctrl+A on a Russian-only keymap reaches the field's own select-all.
+                entry.select_region(0, 0);
+                assert!(chooser.keys.emit_by_name::<bool>(
+                    "key-pressed",
+                    &[&Key::Cyrillic_ef, &38u32, &ModifierType::CONTROL_MASK],
+                ));
+                assert_eq!(
+                    entry.selection_bounds(),
+                    Some((0, entry.text().chars().count() as i32))
+                );
+                assert!(has_focus());
                 assert!(chooser.press(Key::Escape));
                 assert!(chooser.state.view.item_view_has_focus());
             }

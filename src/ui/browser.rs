@@ -23,6 +23,7 @@ use crate::ui::browser::transfer::PendingSendToCompletion;
 use crate::ui::browser::transfer::duplicate_transfer;
 use crate::ui::browser::trash::TrashLoadingView;
 use crate::ui::browser_modes::{BrowserDensity, BrowserMode, ClickActivation, ModeViews};
+use crate::ui::keys;
 use gtk::glib;
 use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
@@ -368,9 +369,7 @@ impl BrowserView {
             .build();
         location_entry.add_css_class("location-entry");
         let confirm_location = gtk::Button::builder()
-            .tooltip_text(crate::i18n::tr(
-                super::accessibility::LOCATION_CONFIRM_LABEL,
-            ))
+            .tooltip_text(super::accessibility::location_confirm_label())
             .build();
         confirm_location.set_child(Some(&crate::assets::primary_icon(
             crate::assets::icons::CHECK,
@@ -378,7 +377,7 @@ impl BrowserView {
         )));
         confirm_location.add_css_class("location-action");
         let cancel_location = gtk::Button::builder()
-            .tooltip_text(crate::i18n::tr(super::accessibility::LOCATION_CANCEL_LABEL))
+            .tooltip_text(super::accessibility::location_cancel_label())
             .build();
         cancel_location.set_child(Some(&crate::assets::primary_icon(
             crate::assets::icons::X,
@@ -758,7 +757,7 @@ impl BrowserView {
         let keys = gtk::EventControllerKey::new();
         keys.set_propagation_phase(gtk::PropagationPhase::Capture);
         let weak_state = Rc::downgrade(&state);
-        keys.connect_key_pressed(move |_, _, _, _| {
+        keys::on_press(&keys, move |_, _| {
             if let Some(state) = weak_state.upgrade() {
                 state.cancel_click_rename();
             }
@@ -2826,16 +2825,6 @@ fn new_folder_destination_depth(
 
 fn single_pane_preview_reservation(width: i32) -> i32 {
     width.max(0) / 2
-}
-
-fn vim_focus_direction(key: gtk::gdk::Key) -> Option<gtk::DirectionType> {
-    match key {
-        gtk::gdk::Key::h => Some(gtk::DirectionType::Left),
-        gtk::gdk::Key::j => Some(gtk::DirectionType::Down),
-        gtk::gdk::Key::k => Some(gtk::DirectionType::Up),
-        gtk::gdk::Key::l => Some(gtk::DirectionType::Right),
-        _ => None,
-    }
 }
 
 mod chooser_context;

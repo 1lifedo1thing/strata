@@ -3,6 +3,8 @@
 use gtk::{glib, prelude::*};
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
 
+use crate::ui::keys::{self, bindings::ESCAPE_ANY};
+
 struct Target {
     id: &'static str,
     page: &'static str,
@@ -104,7 +106,7 @@ const TARGETS: &[Target] = &[
     Target {
         id: "hints",
         page: "general",
-        title: "Show F1 Shortcuts button",
+        title: "Show %{reference_keys} Shortcuts button",
         aliases: "browsing keyboard keybindings hints shortcuts reference help footer",
     },
     Target {
@@ -375,8 +377,8 @@ fn word_score(query: &str, word: &str) -> Option<i32> {
 }
 
 fn score(query: &str, target: &Target) -> Option<i32> {
-    let source_title = normalized(target.title);
-    let localized_title = normalized(&crate::i18n::tr(target.title));
+    let source_title = normalized(&super::translated_in("en", target.title));
+    let localized_title = normalized(&super::translated(target.title));
     let title = format!("{source_title} {localized_title}");
     let aliases = normalized(&format!(
         "{} {} {} {} settings {}",
@@ -562,8 +564,8 @@ pub(super) fn append(navigation: &gtk::Box) -> Search {
         });
         let keys = gtk::EventControllerKey::new();
         let field = source.downgrade();
-        keys.connect_key_pressed(move |_, key, _, _| {
-            if key == gtk::gdk::Key::Escape
+        keys::on_press(&keys, move |_, press| {
+            if press.is(ESCAPE_ANY)
                 && let Some(field) = field.upgrade()
                 && !field.text().is_empty()
             {
