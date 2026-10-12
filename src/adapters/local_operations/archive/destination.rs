@@ -294,12 +294,12 @@ impl ExtractionDestination {
     }
 
     pub(super) fn remove_directory_only_staging(&self, staging: &OsStr) -> Result<bool, String> {
-        remove_tree(self.root.as_fd(), staging, false).map_err(staging_removal_failed)
+        remove_tree(self.root.as_fd(), staging, false, false).map_err(staging_removal_failed)
     }
 
     /// Never follows symlinks. Removal errors can leave a partially deleted tree.
     pub(super) fn remove_staging(&self, staging: &OsStr) -> Result<(), String> {
-        remove_tree(self.root.as_fd(), staging, true)
+        remove_tree(self.root.as_fd(), staging, true, false)
             .map(|_| ())
             .map_err(staging_removal_failed)
     }
@@ -696,7 +696,6 @@ fn rename_no_replace(
     )
 }
 
-/// Without RENAME_NOREPLACE, only non-directories have a safe link/unlink fallback.
 fn move_without_replacing(
     from_directory: BorrowedFd<'_>,
     from: &OsStr,
@@ -719,24 +718,142 @@ fn move_by_link(
     to: &OsStr,
 ) -> rustix::io::Result<()> {
     let stat = rustix::fs::statat(from_directory, from, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
-    if rustix::fs::FileType::from_raw_mode(stat.st_mode) != rustix::fs::FileType::Directory {
-        rustix::fs::linkat(
+    let file_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
+    if file_type != rustix::fs::FileType::Directory {
+        if let Err(error) = rustix::fs::linkat(
             from_directory,
             from,
             to_directory,
             to,
             rustix::fs::AtFlags::empty(),
-        )?;
+        ) {
+            if file_type == rustix::fs::FileType::Symlink {
+                let target = rustix::fs::readlinkat(from_directory, from, Vec::new())?;
+                rustix::fs::symlinkat(&target, to_directory, to)?;
+            } else {
+                return Err(error);
+            }
+        }
         // A leftover source link is reported later as unpublished staging content.
         let _ = rustix::fs::unlinkat(from_directory, from, rustix::fs::AtFlags::empty());
         return Ok(());
     }
-    // A mkdir reservation can be replaced before renameat, which would clobber it.
-    Err(rustix::io::Errno::OPNOTSUPP)
+    move_directory(from_directory, from, to_directory, to, &stat)
+}
+
+/// Linking every entry before removing the source keeps staging intact when migration fails.
+fn move_directory(
+    from_parent: BorrowedFd<'_>,
+    from_name: &OsStr,
+    to_parent: BorrowedFd<'_>,
+    to_name: &OsStr,
+    stat: &rustix::fs::Stat,
+) -> rustix::io::Result<()> {
+    let mode = rustix::fs::Mode::from_raw_mode(0o700 | permission_bits(stat.st_mode));
+    rustix::fs::mkdirat(to_parent, to_name, mode)?;
+    let result = migrate_directory(from_parent, from_name, to_parent, to_name, stat);
+    if result.is_err() {
+        let _ = remove_tree(to_parent, to_name, true, true);
+        return result;
+    }
+    remove_tree(from_parent, from_name, true, true).map(|_| ())
+}
+
+fn migrate_directory(
+    from_parent: BorrowedFd<'_>,
+    from_name: &OsStr,
+    to_parent: BorrowedFd<'_>,
+    to_name: &OsStr,
+    stat: &rustix::fs::Stat,
+) -> rustix::io::Result<()> {
+    let from_dir = rustix::fs::openat(
+        from_parent,
+        from_name,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    let to_dir = rustix::fs::openat(
+        to_parent,
+        to_name,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?;
+    let mut children = Vec::new();
+    for entry in rustix::fs::Dir::read_from(&from_dir)? {
+        let entry = entry?;
+        let child = OsStr::from_bytes(entry.file_name().to_bytes());
+        if child == "." || child == ".." {
+            continue;
+        }
+        let file_type = match entry.file_type() {
+            rustix::fs::FileType::Unknown => rustix::fs::FileType::from_raw_mode(
+                rustix::fs::statat(&from_dir, child, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?
+                    .st_mode,
+            ),
+            file_type => file_type,
+        };
+        children.push((child.to_os_string(), file_type));
+    }
+    for (child, file_type) in children {
+        if file_type == rustix::fs::FileType::Directory {
+            let child_stat =
+                rustix::fs::statat(&from_dir, &child, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)?;
+            let mode = rustix::fs::Mode::from_raw_mode(0o700 | permission_bits(child_stat.st_mode));
+            rustix::fs::mkdirat(&to_dir, &child, mode)?;
+            migrate_directory(
+                from_dir.as_fd(),
+                &child,
+                to_dir.as_fd(),
+                &child,
+                &child_stat,
+            )?;
+        } else if let Err(error) = rustix::fs::linkat(
+            &from_dir,
+            &child,
+            &to_dir,
+            &child,
+            rustix::fs::AtFlags::empty(),
+        ) {
+            if file_type == rustix::fs::FileType::Symlink {
+                let target = rustix::fs::readlinkat(&from_dir, &child, Vec::new())?;
+                rustix::fs::symlinkat(&target, &to_dir, &child)?;
+            } else {
+                return Err(error);
+            }
+        }
+    }
+    let _ = best_effort(rustix::fs::fchmod(
+        &to_dir,
+        rustix::fs::Mode::from_raw_mode(permission_bits(stat.st_mode)),
+    ));
+    let times = rustix::fs::Timestamps {
+        last_access: rustix::fs::Timespec {
+            tv_sec: stat.st_atime as _,
+            tv_nsec: stat.st_atime_nsec as _,
+        },
+        last_modification: rustix::fs::Timespec {
+            tv_sec: stat.st_mtime as _,
+            tv_nsec: stat.st_mtime_nsec as _,
+        },
+    };
+    let _ = best_effort(rustix::fs::futimens(&to_dir, &times));
+    Ok(())
 }
 
 /// Never follows symlinks. With `files` disabled, any non-directory preserves its ancestors.
-fn remove_tree(parent: BorrowedFd<'_>, name: &OsStr, files: bool) -> rustix::io::Result<bool> {
+/// `unlock` restores owner access first so restored read-only modes cannot block removal.
+fn remove_tree(
+    parent: BorrowedFd<'_>,
+    name: &OsStr,
+    files: bool,
+    unlock: bool,
+) -> rustix::io::Result<bool> {
     let directory = rustix::fs::openat(
         parent,
         name,
@@ -746,6 +863,9 @@ fn remove_tree(parent: BorrowedFd<'_>, name: &OsStr, files: bool) -> rustix::io:
             | rustix::fs::OFlags::CLOEXEC,
         rustix::fs::Mode::empty(),
     )?;
+    if unlock {
+        let _ = rustix::fs::fchmod(&directory, rustix::fs::Mode::from_raw_mode(0o700));
+    }
     let mut children = Vec::new();
     for entry in rustix::fs::Dir::read_from(&directory)? {
         let entry = entry?;
@@ -769,7 +889,7 @@ fn remove_tree(parent: BorrowedFd<'_>, name: &OsStr, files: bool) -> rustix::io:
     for (child, is_directory) in children {
         if !is_directory {
             rustix::fs::unlinkat(&directory, &child, rustix::fs::AtFlags::empty())?;
-        } else if !remove_tree(directory.as_fd(), &child, files)? {
+        } else if !remove_tree(directory.as_fd(), &child, files, unlock)? {
             return Ok(false);
         }
     }
