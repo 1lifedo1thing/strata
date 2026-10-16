@@ -2291,6 +2291,20 @@ scrollbar.horizontal > range > trough > slider {
   transform: scale(1.02);
 }
 
+.sidebar-pin-gap,
+.sidebar-pin-gap:drop(active) {
+  min-height: 4px;
+  margin: 0 8px;
+  background: transparent;
+  outline: none;
+  box-shadow: none;
+}
+
+.sidebar-pin-gap.eligible,
+.sidebar-pin-gap.eligible:drop(active) {
+  background-image: linear-gradient(to bottom, transparent 33%, @strata_accent 33%, @strata_accent 66%, transparent 66%);
+}
+
 .sidebar-row:focus {
   outline: 1px solid @strata_accent;
   outline-offset: -1px;
@@ -2415,7 +2429,9 @@ scrollbar.horizontal > range > trough > slider {
   color: @strata_dim_text;
   font-size: 0.78em;
   font-weight: 700;
-  padding: 1px 10px 2px;
+  padding-top: 1px;
+  padding-right: 10px;
+  padding-bottom: 2px;
 }
 
 paned > separator {
